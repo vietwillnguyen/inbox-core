@@ -211,7 +211,17 @@ class TestTheOnlyPathToThePublic:
                         method = method or inspect.isfunction(value)
                         if method and not member.startswith("_") and send_shaped(member):
                             shaped.add(f"{module.__name__}.{obj.__name__}.{member}")
-        assert shaped == {"inbox_core.delivery.ReplySink.send_to_public"}
+        # Implementing the protocol's method is expected (that is what a sink
+        # is); any other send-shaped name is a second path and fails here. The
+        # implementations inside the package are pinned too: the protocol
+        # itself and the recording fake for tests. A real sink in the core
+        # would show up here and need a deliberate decision.
+        others = {name for name in shaped if not name.endswith(".send_to_public")}
+        assert others == set()
+        assert shaped == {
+            "inbox_core.delivery.ReplySink.send_to_public",
+            "inbox_core.testing.fakes.RecordingSink.send_to_public",
+        }
 
     def test_send_to_public_is_called_from_exactly_one_place(self) -> None:
         calls = []

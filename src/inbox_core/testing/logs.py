@@ -48,6 +48,11 @@ class LogCapture(Protocol):
         """The capturing handler."""
         ...
 
+    @property
+    def records(self) -> list[logging.LogRecord]:
+        """Every record captured so far in this test phase."""
+        ...
+
     def set_level(self, level: int | str, logger: str | None = None) -> None:
         """Set the capture level."""
         ...

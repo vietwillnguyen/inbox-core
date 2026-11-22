@@ -194,3 +194,40 @@ Properties every implementation keeps:
 `inbox_core.crypto` is AES-256-GCM from the `cryptography` library, with key ids for rotation: the first key in the setting encrypts, every key decrypts, and `reencrypt` moves a value to the newest key.
 The token format, `<scheme>:v1:<key id>:<base64url(nonce || ciphertext || tag)>`, is the same as the parallel Vietnam Hearts storage work, and the scheme prefix is a parameter, so a cipher built with `scheme="vhenc"` reads tokens written there when the associated-data contexts match.
 Errors name the setting, the key id and caller-supplied ids, never key material or plaintext.
+
+## The pipeline
+
+`Pipeline.process(message)` takes one message through these steps and always returns exactly one `AuditRecord`:
+
+1. Dedupe: a handled message is a `duplicate` and nothing else happens.
+2. Record: the conversation and the inbound row are written before any side effect; a conversation a person owns is `left_for_person`.
+3. Guard: `dropped`, or straight to a person unclassified.
+4. Triage: the classifier with bounded retries (default 3 attempts, backoff 0.5 s then 2 s); still unavailable means `needs_admin` with the fallback category.
+5. Handle and deliver: only `auto_answer`, only within the per-conversation reply cap, and only while delivery is not `off`.
+6. Hand off: the holding message (through the same delivery rules), the notifier, then the pause, then `handled`.
+
+Decisions are `duplicate`, `left_for_person`, `dropped`, `skipped`, `answered`, `answer_held`, `handed_off` and `incomplete`.
+
+It fails closed in three specific ways:
+
+- A handler that declines or raises, a delivery that fails, delivery being off, and the reply cap all become a hand-off, never a silent drop.
+- If the notifier fails, the message is `incomplete`: not marked handled, so it is retried, and the conversation is not paused, so the retry is not mistaken for "a person owns this".
+- Any unexpected error is caught, reported to the notifier as `internal error (<type>)`, and left unhandled for a retry.
+
+A failed holding message does not stop the hand-off; a holding message or answer whose earlier attempt did not finish is never repeated.
+
+The audit record holds the channel, thread and message ids, the conversation id, category, tier, confidence, classifier, decision, reason, handler, mode, delivery outcome, the reason a reply was held, source ids, the guard and the handler's tags.
+It holds no text, subject or address, and the reasons are built from fixed phrases, category names and numbers.
+
+### The privacy sweep
+
+`inbox_core.testing.privacy.run_privacy_sweep(build, corpus, caplog)` is the origin's privacy test turned into a helper any client can run against its own corpus and wiring.
+`build(notifier, audit)` returns the client's pipeline with the sweep's recording notifier and audit sink wired in.
+The sweep drives the corpus through it, then fails if any sender address, any subject of ten or more characters, or any line of text of twenty or more characters appears in a captured log record (message, arguments and formatted traceback), an escaped exception, a notifier payload or an audit record.
+It also fails if nothing was logged or audited, because a sweep over silence proves nothing.
+
+Logs are captured with `testing.logs.attached_caplog`, which hangs pytest's handler directly on the named loggers.
+pytest 9 attaches to loggers that are already non-propagating when a test starts, but not to one that becomes non-propagating later, such as one a logger factory builds on first use; `tests/test_testing_logs.py` pins that trap and shows the helper capturing it.
+`tests/test_privacy_sweep.py` shows the sweep catching a logged body, a logged address, content inside a logged traceback, a non-propagating client logger, content smuggled into a handler's reason (which reaches both the notifier and the audit), and an escaped exception.
+
+The sweep is also available as a fixture with `pytest_plugins = ["inbox_core.testing.pytest_plugin"]`.
