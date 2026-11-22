@@ -31,10 +31,11 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
@@ -94,6 +95,7 @@ Decision = Literal[
     "handed_off",
     "incomplete",
     "person_replied",
+    "busy",
 ]
 """What the pipeline did with a message; ``person_replied`` comes from ``person_replied``."""
 
@@ -246,6 +248,7 @@ class _Draft:
     guard: str = ""
     tags: tuple[str, ...] = ()
     handoff_failures: list[str] = field(default_factory=list)
+    lease_owner: str = ""
 
     def take(self, decision: TriageDecision) -> None:
         self.category = decision.category
@@ -288,6 +291,16 @@ class Pipeline:
     :func:`inbox_core.delivery.parse_mode`. ``handoff_actions`` is the
     channel's shared-inbox side of a hand-off (see :mod:`inbox_core.handoff`);
     without it nothing beyond the holding message and the notifier happens.
+
+    Concurrency: each call takes the conversation's lease in the store before
+    it reads or changes anything in that conversation, waiting up to
+    ``lease_wait`` seconds (polling every ``lease_poll``), and holds it for at
+    most ``lease_ttl`` unless renewed. A call that cannot get it returns
+    ``busy`` with nothing done, and the message stays unhandled for a retry.
+    The lease is renewed immediately before every delivery, and a call that
+    lost it delivers nothing (``incomplete``). ``lease_ttl`` must exceed the
+    longest a call can take between two deliveries (classifier retries
+    included); see ``docs/design.md``.
     """
 
     def __init__(
@@ -304,6 +317,9 @@ class Pipeline:
         guards: Iterable[Guard] | None = None,
         mode_override: DeliveryMode | None = None,
         handoff_actions: HandOffActions | None = None,
+        lease_ttl: timedelta = timedelta(seconds=120),
+        lease_wait: float = 10.0,
+        lease_poll: float = 0.05,
         classifier_attempts: int = 3,
         backoff: tuple[float, ...] = (0.5, 2.0),
         sleep: Callable[[float], object] = time.sleep,
@@ -322,6 +338,12 @@ class Pipeline:
         self._audit = audit
         self._guards = tuple(guards) if guards is not None else default_guards()
         self._actions = handoff_actions if handoff_actions is not None else NoHandOffActions()
+        if lease_ttl <= timedelta(0) or lease_wait < 0 or lease_poll <= 0:
+            raise ValueError("lease_ttl and lease_poll must be positive, lease_wait not negative")
+        self._lease_ttl = lease_ttl
+        self._lease_wait = lease_wait
+        self._lease_poll = lease_poll
+        self._sleep = sleep
         self._clock = clock
         self._mode = mode_override if mode_override is not None else policy.mode
         self._delivery = Delivery(
@@ -383,6 +405,37 @@ class Pipeline:
             message.channel, message.thread_key, message.sender_key
         )
         draft.conversation_id = conversation.id
+        owner = secrets.token_hex(8)
+        if not self._acquire(conversation.id, owner):
+            draft.decision = "busy"
+            draft.reason = "another worker is processing this conversation"
+            return
+        draft.lease_owner = owner
+        try:
+            self._run_leased(message, conversation.id, draft)
+        finally:
+            store.release_lease(conversation.id, owner)
+
+    def _acquire(self, conversation_id: int, owner: str) -> bool:
+        waited = 0.0
+        while True:
+            if self._store.acquire_lease(conversation_id, owner, ttl=self._lease_ttl):
+                return True
+            if waited >= self._lease_wait:
+                return False
+            self._sleep(self._lease_poll)
+            waited += self._lease_poll
+
+    def _run_leased(self, message: IncomingMessage, conversation_id: int, draft: _Draft) -> None:
+        store = self._store
+        # Re-read under the lease: another worker may have finished this very
+        # message, or answered in this conversation, while we waited.
+        if store.is_handled(message.channel, message.provider_message_id):
+            draft.decision = "duplicate"
+            return
+        conversation = store.get_conversation(conversation_id)
+        if conversation is None:
+            raise LookupError("conversation vanished")
         row = store.record_inbound(conversation.id, message)
 
         if conversation.status != "bot":
@@ -508,11 +561,11 @@ class Pipeline:
         draft.sources = reply.sources
         try:
             delivered = self._deliver_once(
-                conversation, row, reply, requires_approval=result.requires_approval
+                conversation, row, reply, draft, requires_approval=result.requires_approval
             )
         except _Unfinished:
             return "an earlier delivery attempt did not finish"
-        except _PersonTookOver:
+        except (_PersonTookOver, _Incomplete):
             raise
         except Exception as exc:
             logger.warning(
@@ -533,6 +586,7 @@ class Pipeline:
         conversation: Conversation,
         row: StoredMessage,
         reply: OutboundReply,
+        draft: _Draft,
         *,
         requires_approval: bool = False,
     ) -> DeliveryResult:
@@ -557,6 +611,10 @@ class Pipeline:
                 )
             return DeliveryResult(Route.NONE, "none", None, "delivery is off")
 
+        if draft.lease_owner and not self._store.renew_lease(
+            conversation.id, draft.lease_owner, ttl=self._lease_ttl
+        ):
+            raise _Incomplete("lost the conversation lease before delivering")
         outbound = self._store.begin_outbound(
             conversation.id,
             reply_to_id=row.id,
@@ -607,12 +665,12 @@ class Pipeline:
                 kind=HOLDING_KIND,
             )
             try:
-                delivered = self._deliver_once(conversation, row, holding)
+                delivered = self._deliver_once(conversation, row, holding, draft)
                 draft.delivery = delivered.action
                 draft.held_because = delivered.held_because
             except _Unfinished:
                 draft.delivery = "none"
-            except _PersonTookOver:
+            except (_PersonTookOver, _Incomplete):
                 raise
             except Exception as exc:
                 # A failed holding message must not stop the hand-off itself.

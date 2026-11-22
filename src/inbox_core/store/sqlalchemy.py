@@ -14,7 +14,7 @@ text column.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import (
@@ -32,6 +32,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
     insert,
+    or_,
     select,
     update,
 )
@@ -70,6 +71,8 @@ conversations = Table(
     Column("bot_reply_count", Integer, nullable=False, default=0),
     Column("created_at", DateTime, nullable=False),
     Column("updated_at", DateTime, nullable=False),
+    Column("lease_owner", String(64), nullable=True),
+    Column("lease_expires_at", DateTime, nullable=True),
     UniqueConstraint("channel", "thread_key", name="uq_inbox_conversations_thread"),
 )
 
@@ -564,6 +567,43 @@ class SqlAlchemyConversationStore:
         with self._engine.begin() as connection:
             self._one(connection, conversations, conversation_id)
             return self._erase(connection, messages.c.conversation_id == conversation_id)
+
+    def acquire_lease(self, conversation_id: int, owner: str, *, ttl: timedelta) -> bool:
+        """Take the lease in one conditional UPDATE, so one caller wins across processes."""
+        now = self._now()
+        c = conversations.c
+        with self._engine.begin() as connection:
+            result = connection.execute(
+                update(conversations)
+                .where(
+                    c.id == conversation_id,
+                    or_(c.lease_owner.is_(None), c.lease_owner == owner, c.lease_expires_at <= now),
+                )
+                .values(lease_owner=owner, lease_expires_at=now + ttl)
+            )
+            return int(result.rowcount or 0) == 1
+
+    def renew_lease(self, conversation_id: int, owner: str, *, ttl: timedelta) -> bool:
+        """Extend the lease if still held by ``owner`` and not expired."""
+        now = self._now()
+        c = conversations.c
+        with self._engine.begin() as connection:
+            result = connection.execute(
+                update(conversations)
+                .where(c.id == conversation_id, c.lease_owner == owner, c.lease_expires_at > now)
+                .values(lease_expires_at=now + ttl)
+            )
+            return int(result.rowcount or 0) == 1
+
+    def release_lease(self, conversation_id: int, owner: str) -> None:
+        """Drop the lease if held by ``owner``."""
+        c = conversations.c
+        with self._engine.begin() as connection:
+            connection.execute(
+                update(conversations)
+                .where(c.id == conversation_id, c.lease_owner == owner)
+                .values(lease_owner=None, lease_expires_at=None)
+            )
 
     def erase_content_before(self, cutoff: datetime) -> int:
         """Delete content from every message created before ``cutoff``; keep the rows."""

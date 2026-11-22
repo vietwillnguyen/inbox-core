@@ -87,6 +87,7 @@ def harness(
 ) -> Harness:
     fake = classifier if classifier is not None else FakeClassifier(default=signals("faq"))
     slept: list[float] = []
+    sleep = kwargs.pop("sleep", slept.append)
     parts = Harness(
         pipeline=None,  # type: ignore[arg-type]
         classifier=fake,
@@ -105,7 +106,7 @@ def harness(
         store=parts.store,
         notifier=parts.notifier,
         audit=parts.audit,
-        sleep=slept.append,
+        sleep=sleep,
         **kwargs,
     )
     return parts

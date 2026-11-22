@@ -8,7 +8,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from inbox_core.crypto import FieldCipher
 from inbox_core.messages import IncomingMessage
@@ -52,6 +52,7 @@ class InMemoryConversationStore:
         self._threads: dict[tuple[str, str], int] = {}
         self._rows: dict[int, _Row] = {}
         self._inbound: dict[tuple[str, str], int] = {}
+        self._leases: dict[int, tuple[str, datetime]] = {}
 
     def _now(self) -> datetime:
         return as_naive_utc(self._clock())
@@ -414,6 +415,35 @@ class InMemoryConversationStore:
                 if row.message.conversation_id == conversation_id
             }
             return self._erase(rows)
+
+    def acquire_lease(self, conversation_id: int, owner: str, *, ttl: timedelta) -> bool:
+        """Take the lease under the store's lock."""
+        with self._lock:
+            if conversation_id not in self._conversations:
+                return False
+            now = self._now()
+            held = self._leases.get(conversation_id)
+            if held is not None and held[0] != owner and held[1] > now:
+                return False
+            self._leases[conversation_id] = (owner, now + ttl)
+            return True
+
+    def renew_lease(self, conversation_id: int, owner: str, *, ttl: timedelta) -> bool:
+        """Extend the lease if still held by ``owner``."""
+        with self._lock:
+            held = self._leases.get(conversation_id)
+            now = self._now()
+            if held is None or held[0] != owner or held[1] <= now:
+                return False
+            self._leases[conversation_id] = (owner, now + ttl)
+            return True
+
+    def release_lease(self, conversation_id: int, owner: str) -> None:
+        """Drop the lease if held by ``owner``."""
+        with self._lock:
+            held = self._leases.get(conversation_id)
+            if held is not None and held[0] == owner:
+                del self._leases[conversation_id]
 
     def erase_content_before(self, cutoff: datetime) -> int:
         """Delete content from every message created before ``cutoff``; keep the rows."""

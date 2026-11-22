@@ -277,6 +277,22 @@ class ConversationStore(Protocol):
         """Delete the content of every message in this sender's conversations."""
         ...
 
+    def acquire_lease(self, conversation_id: int, owner: str, *, ttl: timedelta) -> bool:
+        """Take the conversation's processing lease for ``ttl``. False if someone else holds it.
+
+        A lease that has expired can be taken. Taking it again as its owner
+        renews it. With a shared database this is atomic across processes.
+        """
+        ...
+
+    def renew_lease(self, conversation_id: int, owner: str, *, ttl: timedelta) -> bool:
+        """Extend the lease if ``owner`` still holds it. False if it expired and was taken."""
+        ...
+
+    def release_lease(self, conversation_id: int, owner: str) -> None:
+        """Give the lease up, if ``owner`` holds it."""
+        ...
+
     def erase_content_before(self, cutoff: datetime) -> int:
         """Delete the content of every message created before ``cutoff``; keep the rows.
 

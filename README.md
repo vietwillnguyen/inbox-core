@@ -42,6 +42,7 @@ It does not guarantee:
 - **Anything about your code.** Your channel adapter, your own logging and your hosting are yours; run the privacy sweep over them.
 - **Retention, unless you schedule it.** The store deletes content when asked, and `inbox_core.retention` is the job that asks (content older than N days, keeping the skeleton); running it on a schedule is yours.
 - **Exactly-once sending under every crash.** If a process dies after a reply leaves but before it is recorded, the next attempt hands off to a person rather than risk a second send.
+- **One worker per conversation across machines with unsynchronised clocks.** Processing of a conversation is serialised by a lease in the store, across threads with any store and across processes with the SQL store; the lease's expiry is read from each worker's clock (see [`docs/design.md`](docs/design.md)).
 - **Shared limits across processes for the in-memory parts.** The flood guard and `InMemorySendCaps` are per process; use `StoreSendCaps` for caps that hold across processes and restarts.
 
 ## Install

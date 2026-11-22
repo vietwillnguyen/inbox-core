@@ -233,6 +233,26 @@ Errors name the setting, the key id and caller-supplied ids, never key material 
 
 Decisions are `duplicate`, `left_for_person`, `dropped`, `skipped`, `answered`, `answer_held`, `handed_off` and `incomplete`.
 
+### Concurrency: one worker per conversation
+
+Two deliveries for one conversation, whether two different messages or the same message delivered twice, must not produce two replies.
+The guarantee: at most one `Pipeline.process` call works on a given conversation at a time.
+
+- Each call takes the conversation's lease in the store (`acquire_lease`) before it reads or changes anything in that conversation, then re-reads under the lease: a message another worker finished meanwhile is a `duplicate`, and the reply count and status are current.
+- In memory the lease is a dictionary entry under the store's lock, so it holds across threads in one process.
+  In SQL it is one conditional `UPDATE` on `inbox_conversations` (`lease_owner`, `lease_expires_at`), so it holds across processes sharing the database; `tests/test_concurrency.py` proves both with real threads and with two spawned processes over one SQLite file.
+- A call waits up to `lease_wait` seconds (default 10); if it still cannot get the lease it returns `busy` with nothing done and the message unhandled, for the caller to retry.
+- A lease expires after `lease_ttl` (default 120 seconds) so a crashed worker does not block a conversation forever.
+  It is renewed immediately before every delivery, and a call that has lost it delivers nothing and is `incomplete`.
+
+What is not guaranteed: lease expiry is read from each worker's clock, so workers on different machines need synchronised clocks, and a worker that stalls for longer than `lease_ttl` between its renewal and the send itself (one network call) could overlap a successor.
+Set `lease_ttl` well above the slowest classifier-plus-handler time, retries included.
+
+### Schema changes in this version
+
+Pre-release tables need these columns added: `inbox_conversations.lease_owner` (string 64) and `lease_expires_at` (datetime), and `inbox_messages.held_because` (string 128), `review_outcome` (string 32), `reviewed_by` (string 64) and `reviewed_at` (datetime, indexed).
+`create_schema` creates them for a new database; there is no migration tool in the package.
+
 ### A person replied
 
 `Pipeline.person_replied(channel, thread_key, sender_key, message_id=...)` is the entry point for "a person replied in this conversation".
