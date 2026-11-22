@@ -1,0 +1,26 @@
+inbox-core
+Copyright (c) 2026 Viet Nguyen
+
+Parts of this package are derived from the Vietnam Hearts volunteer platform,
+which is released under the MIT licence:
+
+    Copyright (c) 2025 Vietnam Hearts
+
+The modules below started from that project's inbound answer engine. They were
+rewritten to be channel-neutral and to take every organisation-specific value
+(the category table, prompts, languages and caps) from configuration, but they
+keep its structure and rules, so its copyright notice is kept alongside ours.
+
+    inbox_core.messages            channels/base.py
+    inbox_core.triage              triage/protocol.py, triage/policy.py
+    inbox_core.prompts             triage/prompts.py
+    inbox_core.adapters.litellm    triage/litellm.py
+    inbox_core.adapters.jev        triage/jev.py
+    inbox_core.shadow              triage/shadow.py
+    inbox_core.delivery            email_bot/delivery.py, email_bot/caps.py
+    inbox_core.store               conversation_service.py
+    inbox_core.crypto              the encrypted conversation store work
+    inbox_core.testing             tests/fixtures/logs.py, tests/test_email_bot_privacy.py
+    inbox_core.evals               evals/ (loader, metrics, judge, runners)
+
+Everything else is new in this package.

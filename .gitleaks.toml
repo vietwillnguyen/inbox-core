@@ -1,0 +1,4 @@
+# Secret scan configuration. The default rules apply in full; nothing is
+# allow-listed, so a real key anywhere in the history fails the scan.
+[extend]
+useDefault = true

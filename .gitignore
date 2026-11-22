@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Never commit environment files or local state
+.env
+.env.*
+!.env.example
+.local/
+*.sqlite
+*.db
+
+# Evaluation output that has not been reviewed for publishing
+eval-runs/
