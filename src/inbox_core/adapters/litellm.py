@@ -17,11 +17,18 @@ from collections.abc import Callable
 from typing import Any
 
 from inbox_core.config import ClientConfig
+from inbox_core.handlers import GenerationRequest
 from inbox_core.messages import IncomingMessage
-from inbox_core.prompts import classifier_input, render_triage_prompts
+from inbox_core.prompts import REFUSAL_SENTINEL, classifier_input, render_triage_prompts
 from inbox_core.triage import TriageSignals, TriageUnavailable, signals_from_payload
 
-__all__ = ["DEFAULT_MODEL", "LiteLLMClassifier", "first_content", "load_completion"]
+__all__ = [
+    "DEFAULT_MODEL",
+    "LiteLLMClassifier",
+    "LiteLLMGenerator",
+    "first_content",
+    "load_completion",
+]
 
 DEFAULT_MODEL = "gemini/gemini-3.5-flash-lite"
 """Gemini Flash-Lite, the default classifier model. Override with ``model``."""
@@ -151,3 +158,56 @@ def _schema(config: ClientConfig) -> dict[str, Any]:
         ],
         "additionalProperties": False,
     }
+
+
+class LiteLLMGenerator:
+    """A :class:`inbox_core.handlers.Generator` over ``litellm.completion``.
+
+    The system message is the answer instructions followed by the passages,
+    each labelled with its id; the user message is the sender's subject and
+    text. Errors propagate: :class:`inbox_core.handlers.GroundedAnswer` turns
+    them into a hand-off.
+    """
+
+    def __init__(
+        self,
+        *,
+        model: str = DEFAULT_MODEL,
+        completion: Completion | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        timeout: float = 15.0,
+    ) -> None:
+        self._model = model
+        self._completion = completion if completion is not None else load_completion()
+        self._api_key = api_key
+        self._api_base = api_base
+        self._timeout = timeout
+
+    @property
+    def name(self) -> str:
+        """Includes the model."""
+        return f"litellm:{self._model}"
+
+    def generate(self, request: GenerationRequest) -> str:
+        """The model's answer, or the refusal sentinel when it returns nothing."""
+        context = "\n\n".join(
+            f"[{p.entry.id}] {p.entry.title}\n{p.entry.text}" for p in request.passages
+        )
+        question = request.question
+        if request.subject:
+            question = f"Subject: {request.subject}\n\n{question}"
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": f"{request.instructions}\n\nContext:\n{context}"},
+                {"role": "user", "content": question},
+            ],
+            "temperature": 0,
+            "timeout": self._timeout,
+        }
+        if self._api_key:
+            kwargs["api_key"] = self._api_key
+        if self._api_base:
+            kwargs["api_base"] = self._api_base
+        return first_content(self._completion(**kwargs)).strip() or REFUSAL_SENTINEL

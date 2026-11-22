@@ -110,3 +110,34 @@ A channel guard reads its own extension, for example `message.extension_as(Email
 `tests/test_guards.py` includes an email auto-reply guard written that way.
 A guard that raises fails closed to `hand_off`, and its reason keeps only the exception's type name.
 Verdict reasons are capped at 120 characters and must be fixed phrases, because they reach the audit record.
+
+## Handlers
+
+A handler is a named step chosen by category from a `HandlerRegistry`.
+The pipeline calls it only for a message whose tier is `auto_answer`, with one `HandlerRequest` (the message, the triage decision and the client config), and gets back one `HandlerResult`: a reply to deliver, or a hand-off to a person with a short reason.
+A handler never sends and never sets a tier; delivery, caps and escalation stay in the pipeline, so every handler inherits them.
+A handler that raises is treated as a hand-off.
+
+Built-ins:
+
+- `GroundedAnswer(retriever, generator, min_score=...)` retrieves passages, keeps those scoring at least `min_score`, and asks the generator to answer from them only.
+  It returns the ids and titles of the passages it used as `sources`, and hands off when nothing clears the threshold, when the generator returns the refusal sentinel or nothing, and when retrieval or generation fails.
+- `Template(texts)` returns fixed text the client wrote, by language, and hands off rather than answer in a language it has no text for.
+  `Template.from_config` reads a `[templates.<name>]` table from the client config.
+- `HandOff()` always hands off; it is the registry's default for any category without a handler.
+
+`InMemoryRetriever` is BM25 over titles, keywords and text, with no embeddings and no network, for tests, demos and small knowledge bases.
+`load_markdown_knowledge` reads `## <id> <title>` sections, each optionally starting with a `Keywords:` line, which is how an English entry can be found by a question in another language.
+`ExtractiveGenerator` returns the best passage verbatim; `adapters.litellm.LiteLLMGenerator` asks a model, under instructions rendered from the client config.
+
+### How future handlers fit without changing the protocol
+
+Neither of these is built; this is how they would plug in.
+
+- **A tool-calling action handler** (the "read" and "propose" rungs of the actions ladder) is a `Handler` whose constructor receives its tool client, for example an MCP client scoped to the few operations it needs, so credentials live in the handler instance and never in the request.
+  On the read rung it looks something up and returns `HandlerResult.reply(...)` with `tags=("tool:order_lookup",)`, so the audit records which tool ran without recording what it returned.
+  On the propose rung it returns its proposal with `requires_approval=True`, which makes delivery hold it for a person in every mode, auto included.
+  The third rung, acting alone, needs an allow list and caps of its own and is deliberately out of scope.
+- **A vertical handler** (such as drafting a quote from stock) is the same: a `Handler` registered for its category, holding its own dependencies, returning a reply, usually with `requires_approval=True`.
+
+New context a handler might need later, such as the conversation so far, is added to `HandlerRequest` as a field with a default, so existing handlers keep working.

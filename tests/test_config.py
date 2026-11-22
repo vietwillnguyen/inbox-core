@@ -316,3 +316,33 @@ class TestRemainingShapes:
         assert "triage.categories[11] must be a table" in problems_of(
             lambda: ClientConfig.from_mapping(data)
         )
+
+
+class TestTemplates:
+    def with_templates(self, templates: Any) -> dict[str, Any]:
+        data = tomllib.loads(ORIGIN.read_text(encoding="utf-8"))
+        data["templates"] = templates
+        return data
+
+    def test_templates_load_and_are_read_only(self) -> None:
+        config = ClientConfig.from_mapping(
+            self.with_templates({"join": {"en": "Join here.", "vi": "Tham gia."}})
+        )
+        assert config.templates["join"]["vi"] == "Tham gia."
+        with pytest.raises(TypeError):
+            config.templates["join"]["en"] = "x"  # type: ignore[index]
+
+    @pytest.mark.parametrize(
+        ("templates", "problem"),
+        [
+            ({"join": {"fr": "Bonjour"}}, "unconfigured language 'fr'"),
+            ({"join": {"en": " "}}, "empty text"),
+            ({"join": {}}, "at least one"),
+            ({"Join Now": {"en": "x"}}, "lower-case identifier"),
+            ("join", "templates must be a table"),
+        ],
+    )
+    def test_bad_templates_are_refused(self, templates: Any, problem: str) -> None:
+        assert problem in problems_of(
+            lambda: ClientConfig.from_mapping(self.with_templates(templates))
+        )

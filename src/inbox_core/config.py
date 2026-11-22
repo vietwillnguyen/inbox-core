@@ -249,12 +249,46 @@ def _rule_problems(rule: CategoryRule) -> Iterable[str]:
         )
 
 
+def _template_problems(
+    templates: Mapping[str, Mapping[str, str]], policy: TriagePolicy
+) -> list[str]:
+    problems: list[str] = []
+    for name, texts in templates.items():
+        if not isinstance(name, str) or not _NAME.match(name):
+            problems.append(f"template name {name!r} must be a lower-case identifier")
+        if not isinstance(texts, Mapping) or not texts:
+            problems.append(f"template {name!r} needs at least one language = text entry")
+            continue
+        for code, text in texts.items():
+            if code not in policy.languages:
+                problems.append(f"template {name!r} has text for unconfigured language {code!r}")
+            if not isinstance(text, str) or not text.strip():
+                problems.append(f"template {name!r} has an empty text for {code!r}")
+    return problems
+
+
 @dataclass(frozen=True)
 class ClientConfig:
-    """Everything a client configures about the core, as one validated object."""
+    """Everything a client configures about the core, as one validated object.
+
+    ``templates`` holds fixed replies the client wrote, by template name and
+    then by language code, for the :class:`inbox_core.handlers.Template`
+    handler.
+    """
 
     organisation: Organisation
     triage: TriagePolicy
+    templates: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        frozen = {
+            name: MappingProxyType(dict(texts)) if isinstance(texts, Mapping) else texts
+            for name, texts in dict(self.templates).items()
+        }
+        object.__setattr__(self, "templates", MappingProxyType(frozen))
+        problems = _template_problems(self.templates, self.triage)
+        if problems:
+            raise ConfigError(problems)
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any], source: str = "configuration") -> ClientConfig:
@@ -316,14 +350,20 @@ class _Reader:
         return cast("Mapping[str, Any]", data)
 
     def client(self, data: Mapping[str, Any]) -> ClientConfig | None:
-        root = self.table(data, "the configuration", ("organisation", "triage"))
+        root = self.table(data, "the configuration", ("organisation", "triage", "templates"))
         if root is None:
             return None
         organisation = self.organisation(root.get("organisation"))
         triage = self.triage(root.get("triage"))
+        templates = root.get("templates", {})
+        if not isinstance(templates, Mapping):
+            self.problems.append("templates must be a table of template tables")
+            return None
         if organisation is None or triage is None:
             return None
-        return ClientConfig(organisation=organisation, triage=triage)
+        return self._build(
+            lambda: ClientConfig(organisation=organisation, triage=triage, templates=templates)
+        )
 
     def organisation(self, data: object) -> Organisation | None:
         table = self.table(data, "organisation", ("name", "summary"))
