@@ -165,3 +165,32 @@ The guarantee that there is exactly one code path to the public is enforced by `
 
 The delivery section of the configuration defaults to the safe settings: mode `off`, no language signed off for automatic sending, a daily cap of 30, two conversations per sender per day, one bot reply per conversation, and UTC.
 An unknown mode in a configuration file is an error; `parse_mode`, for runtime settings such as an environment variable, reads anything unknown as `off`.
+
+## The conversation record
+
+`ConversationStore` is one protocol with two implementations: `store.memory.InMemoryConversationStore` in the core, and `store.sqlalchemy.SqlAlchemyConversationStore` behind the `sqlalchemy` extra.
+`tests/test_store.py` runs the same contract against both.
+
+Properties every implementation keeps:
+
+- **Handled, not seen.** `record_inbound` writes and commits the row before any side effect, so a crash cannot produce a second reply.
+  `is_handled` reads `handled_at`, which `mark_handled` sets only at a terminal state.
+  A row without it is a message that was seen and not finished, and it is retried.
+  Skipping on the row's existence is the silent-drop bug the origin documented; do not.
+- **An outbound attempt is recorded before delivery.**
+  `begin_outbound` writes a `pending` row linked to the inbound row, and `finish_outbound` records what delivery did.
+  On a retry the pipeline sees the earlier attempt and does not deliver twice; if the attempt never finished, it hands off rather than guess whether the reply went out.
+- **Naive UTC.** Every timestamp is stored and returned as a naive datetime in UTC.
+  Any bound compared against one must go through `as_naive_utc` first, because an aware bound silently matches nothing; that bug once made every send cap read as untouched in the origin.
+  Days are decided in the organisation's timezone and then converted.
+- **No plaintext.** With a `FieldCipher`, inbound subject, text and sender address, and outbound reply text, are stored encrypted, each bound to its column as associated data.
+  Without a cipher, no content is stored at all.
+- **Delete content, keep the skeleton.** `erase_conversation` and `erase_sender` remove the encrypted content and set `content_erased_at`, and keep the rows, because dedupe, the caps and the metrics read them.
+
+`StoreSendCaps` counts the day's sends from the store, so caps survive a restart and hold across processes.
+
+### Encryption
+
+`inbox_core.crypto` is AES-256-GCM from the `cryptography` library, with key ids for rotation: the first key in the setting encrypts, every key decrypts, and `reencrypt` moves a value to the newest key.
+The token format, `<scheme>:v1:<key id>:<base64url(nonce || ciphertext || tag)>`, is the same as the parallel Vietnam Hearts storage work, and the scheme prefix is a parameter, so a cipher built with `scheme="vhenc"` reads tokens written there when the associated-data contexts match.
+Errors name the setting, the key id and caller-supplied ids, never key material or plaintext.
