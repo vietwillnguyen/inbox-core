@@ -142,7 +142,10 @@ class HandlerResult:
 class Handler(Protocol):
     """Decides what to say to one auto-answerable message."""
 
-    name: str
+    @property
+    def name(self) -> str:
+        """A short identifier for audit records and logs."""
+        ...
 
     def handle(self, request: HandlerRequest) -> HandlerResult:
         """A reply or a hand-off. May raise; the pipeline treats that as a hand-off."""
@@ -218,7 +221,10 @@ class GenerationRequest:
 class Generator(Protocol):
     """Writes an answer from passages, or returns the refusal sentinel."""
 
-    name: str
+    @property
+    def name(self) -> str:
+        """A short identifier for audit records and logs."""
+        ...
 
     def generate(self, request: GenerationRequest) -> str:
         """The answer text, or :data:`inbox_core.prompts.REFUSAL_SENTINEL`."""

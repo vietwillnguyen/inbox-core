@@ -81,7 +81,10 @@ class GuardResult:
 class Guard(Protocol):
     """One check. Returns a verdict to stop the message, or None to let it through."""
 
-    name: str
+    @property
+    def name(self) -> str:
+        """A short identifier for audit records and logs."""
+        ...
 
     def check(self, message: IncomingMessage) -> GuardVerdict | None:
         """The verdict for ``message``, or None."""

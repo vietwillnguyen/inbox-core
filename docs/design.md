@@ -231,3 +231,18 @@ pytest 9 attaches to loggers that are already non-propagating when a test starts
 `tests/test_privacy_sweep.py` shows the sweep catching a logged body, a logged address, content inside a logged traceback, a non-propagating client logger, content smuggled into a handler's reason (which reaches both the notifier and the audit), and an escaped exception.
 
 The sweep is also available as a fixture with `pytest_plugins = ["inbox_core.testing.pytest_plugin"]`.
+
+## Evaluation
+
+`inbox_core.evals` carries the origin's three evaluation questions over to any client:
+
+- **May this classifier decide?** `evaluate_triage` scores a classifier against a golden set; the gate is 100 percent recall on `needs_executive` with no case left unclassified, because a missed sensitive message is not compensated for by accuracy elsewhere.
+- **Are the answers grounded?** `evaluate_groundedness` answers every `auto_answer` case with a handler and has a judge grade it on two separate questions: is every claim supported by the context, and does it state anything forbidden.
+  A refusal counts against correctness, and a judge whose output cannot be read is never a pass.
+- **Where should the thresholds sit?** `sweep_triage_threshold` re-derives tiers at each confidence threshold from one pass of classifier calls; `sweep_answer_threshold` shows what each retrieval-score gate would have let through.
+
+A golden set is a TOML or YAML list of cases validated against the client's config.
+`expected_tier` is never trusted as written: it is recomputed with `derive_tier` from the case's expected signals at confidence 1.0, so a golden set cannot drift from the policy it measures.
+Every `auto_answer` case needs `must_mention` facts, or the judge has nothing to check.
+
+The runners take their model-backed parts as arguments, so they are tested in CI with fakes; `python -m inbox_core.evals` builds the real LiteLLM ones on demand, and its tests inject a fake completion so the whole command runs offline.

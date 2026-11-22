@@ -109,17 +109,38 @@ config = load_config("client.toml")
 retriever = InMemoryRetriever(load_markdown_knowledge("knowledge.md"))
 pipeline = Pipeline(
     config=config,
-    classifier=LiteLLMClassifier(config),           # Gemini Flash-Lite by default
+    classifier=LiteLLMClassifier(config),  # Gemini Flash-Lite by default
     handlers=HandlerRegistry({"faq": GroundedAnswer(retriever, LiteLLMGenerator(), min_score=1.0)}),
-    sink=my_channel_sink,                            # implements ReplySink
+    sink=my_channel_sink,  # implements ReplySink
     store=InMemoryConversationStore(),
-    notifier=my_notifier,                            # implements Notifier
+    notifier=my_notifier,  # implements Notifier
     audit=JsonlAuditSink("audit.jsonl"),
 )
 record = pipeline.process(incoming_message)
 ```
 
 A channel provides two things: a parser into `IncomingMessage`, and a `ReplySink` with `send_to_public` and `hold_for_review`.
+
+## Evaluating
+
+Three runners answer three questions, and none of them runs in CI, because they spend real model calls:
+
+```sh
+uv pip install 'inbox-core[litellm]'      # LiteLLM reads GEMINI_API_KEY (or a gateway) from the environment
+
+# May this classifier decide? Exits 1 below 100 percent recall on needs_executive.
+python -m inbox_core.evals triage --config client.toml --golden golden.toml --out triage.json
+
+# Are the answers grounded? Exits 1 below 90 percent.
+python -m inbox_core.evals groundedness --config client.toml --golden golden.toml \
+    --knowledge knowledge.md --out grounded.json --answers-out answers.json
+
+# Where should the two thresholds sit? One pass of calls, re-scored at every threshold.
+python -m inbox_core.evals calibrate --config client.toml --golden golden.toml --answers answers.json
+```
+
+What does run in CI is what can be wrong for free: golden-set validation, including that every case's `expected_tier` is what `derive_tier` actually returns for it under the client's table, and the metric arithmetic.
+Summaries written to disk hold numbers, category names and case ids only.
 
 ## Development
 

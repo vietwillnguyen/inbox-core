@@ -120,7 +120,10 @@ class TriageDecision(TriageSignals):
 class TriageClassifier(Protocol):
     """One call, four answers. Raises :class:`TriageUnavailable` rather than guessing."""
 
-    name: str
+    @property
+    def name(self) -> str:
+        """A short identifier for audit records and logs."""
+        ...
 
     def classify(self, message: IncomingMessage) -> TriageSignals:
         """The signals for ``message``."""
