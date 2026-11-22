@@ -179,7 +179,8 @@ def test_a_failing_agent_reply_does_not_fall_back(tmp_path: Path) -> None:
     stack.chatwoot.conversation(30)
     stack.chatwoot.message(1, 30, "On it", message_type=1, sender_type="User")
     stack.webhook(message_payload(30, 1, "x", message_type="outgoing", sender_type="user"))
-    assert stack.chatwoot.writes == []
+    assert stack.chatwoot.public_messages(30) == []
+    assert stack.chatwoot.notes(30) == []
     stack.parts.store.close()
 
 

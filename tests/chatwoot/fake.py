@@ -43,6 +43,10 @@ class FakeChatwoot:
     fail_posts: bool = False
     down: bool = False
     failures: dict[str, int] = field(default_factory=dict)
+    # Chatwoot deletes a conversation in a background job: it is still there
+    # for this many reads after the DELETE is accepted.
+    delete_lag: int = 0
+    deleting: dict[int, int] = field(default_factory=dict)
     next_id: int = 100
 
     def __post_init__(self) -> None:
@@ -169,7 +173,13 @@ class FakeChatwoot:
         return httpx.Response(404, json={"error": "not found"})
 
     def _show(self, conversation: dict[str, Any]) -> dict[str, Any]:
+        mine = [
+            m
+            for m in sorted(self.messages.values(), key=lambda m: m["id"])
+            if m["conversation_id"] == conversation["id"] and m["message_type"] != 2
+        ]
         return {
+            "last_non_activity_message": mine[-1] if mine else None,
             "id": conversation["id"],
             "account_id": conversation["account_id"],
             "inbox_id": conversation["inbox_id"],
@@ -202,6 +212,11 @@ class FakeChatwoot:
         is_bot: bool,
         user: User | None,
     ) -> httpx.Response:
+        if conversation_id in self.deleting:
+            self.deleting[conversation_id] -= 1
+            if self.deleting[conversation_id] < 0:
+                del self.deleting[conversation_id]
+                self.conversations.pop(conversation_id, None)
         conversation = self.conversations.get(conversation_id)
         if conversation is None:
             return httpx.Response(404, json={"error": "Resource could not be found"})
@@ -214,9 +229,15 @@ class FakeChatwoot:
         if rest == "" and request.method == "DELETE":
             if user is None or user.roles.get(ACCOUNT) != "administrator":
                 return httpx.Response(401, json={"error": "unauthorized"})
-            del self.conversations[conversation_id]
+            if self.delete_lag:
+                self.deleting[conversation_id] = self.delete_lag
+            else:
+                del self.conversations[conversation_id]
             self.writes.append(("delete conversation", conversation_id, None))
             return httpx.Response(200)
+        if rest == "/messages" and request.method == "GET" and is_bot:
+            # Not in BOT_ACCESSIBLE_ENDPOINTS at v4.19.1.
+            return httpx.Response(401, json={"error": "Invalid Access Token"})
         if rest == "/messages" and request.method == "GET":
             after = int(request.url.params.get("after", "0"))
             found = [

@@ -59,21 +59,38 @@ class TestAnswering:
         stack.visitor_says(11, 201, DAMAGE)
         writes = [(kind, body) for kind, cid, body in stack.chatwoot.writes if cid == 11]
         kinds = [kind for kind, _ in writes]
-        assert kinds == ["message", "message", "labels", "assign", "status"]
-        assert writes[0][1]["private"] is False
-        assert "A volunteer will read your message" in writes[0][1]["content"]
-        assert writes[1][1]["private"] is True
-        assert "Category: damage_report. Tier: needs_executive." in writes[1][1]["content"]
-        assert writes[2][1] == ["handoff", "damage_report"]
-        assert writes[3][1] == 5
-        assert writes[4][1] == "open"
+        assert kinds == ["labels", "message", "message", "labels", "assign", "status"]
+        assert writes[0][1] == ["inbox-core"]
+        assert writes[1][1]["private"] is False
+        assert "A volunteer will read your message" in writes[1][1]["content"]
+        assert writes[2][1]["private"] is True
+        assert "Category: damage_report. Tier: needs_executive." in writes[2][1]["content"]
+        assert writes[3][1] == ["inbox-core", "handoff", "damage_report"]
+        assert writes[4][1] == 5
+        assert writes[5][1] == "open"
         assert last_decision(stack) == "handed_off"
 
     def test_labels_are_added_to_the_existing_ones(self, stack: Stack) -> None:
         stack.chatwoot.conversation(11)
         stack.chatwoot.conversations[11]["labels"] = ["vip"]
         stack.visitor_says(11, 201, DAMAGE)
-        assert stack.chatwoot.conversations[11]["labels"] == ["vip", "handoff", "damage_report"]
+        assert stack.chatwoot.conversations[11]["labels"] == [
+            "vip",
+            "inbox-core",
+            "handoff",
+            "damage_report",
+        ]
+
+    def test_every_processed_conversation_is_labelled_once(self, stack: Stack) -> None:
+        stack.visitor_says(10, 200, QUESTION)
+        stack.visitor_says(10, 201, "And where are you?")
+        labels = [body for kind, cid, body in stack.chatwoot.writes if kind == "labels"]
+        assert labels == [["inbox-core"]]
+
+    def test_failing_to_label_does_not_stop_the_answer(self, stack: Stack) -> None:
+        stack.chatwoot.failures["/labels"] = 1
+        stack.visitor_says(10, 200, QUESTION)
+        assert last_decision(stack) == "answered"
 
     def test_the_note_and_labels_hold_no_visitor_text(self, stack: Stack) -> None:
         stack.visitor_says(11, 201, DAMAGE)
@@ -128,8 +145,9 @@ class TestIgnoring:
         assert stack.chatwoot.writes == []
         assert metrics(stack)["webhooks_ignored"] == {why: 1}
 
-    def test_a_message_chatwoot_does_not_have_is_refused(self, stack: Stack) -> None:
+    def test_a_message_newer_than_chatwoots_latest_is_refused(self, stack: Stack) -> None:
         stack.chatwoot.conversation(13)
+        stack.chatwoot.message(5, 13, QUESTION)
         stack.webhook(message_payload(13, 999, QUESTION))
         assert metrics(stack)["webhooks_rejected"] == {"message not found in Chatwoot": 1}
         assert stack.chatwoot.writes == []
@@ -153,6 +171,20 @@ class TestIgnoring:
         stack.chatwoot.message(5, 13, QUESTION)
         stack.webhook(message_payload(13, 5, QUESTION))
         assert metrics(stack)["webhooks_rejected"] == {"another account": 1}
+
+    def test_a_message_in_an_empty_conversation_is_refused(self, stack: Stack) -> None:
+        stack.chatwoot.conversation(13)
+        stack.webhook(message_payload(13, 1, QUESTION))
+        assert metrics(stack)["webhooks_rejected"] == {"message not found in Chatwoot": 1}
+
+    def test_an_older_message_is_acted_on_from_the_signed_body(self, stack: Stack) -> None:
+        # Chatwoot's latest is already a newer message; the signed body is used.
+        stack.chatwoot.conversation(13)
+        stack.chatwoot.message(5, 13, "placeholder")
+        stack.chatwoot.message(6, 13, "a newer message")
+        stack.webhook(message_payload(13, 5, DAMAGE))
+        assert last_decision(stack) == "handed_off"
+        assert stack.audit.records[-1].category == "damage_report"
 
 
 class TestUnverified:
@@ -245,7 +277,11 @@ class TestWhenTheCoreCannotFinish:
         (note,) = stack.chatwoot.notes(16)
         assert note.startswith("inbox-core could not process the latest message")
         assert "internal error (ConnectionError)" in note
-        assert stack.chatwoot.conversations[16]["labels"] == ["handoff", "inbox-core-unavailable"]
+        assert stack.chatwoot.conversations[16]["labels"] == [
+            "inbox-core",
+            "handoff",
+            "inbox-core-unavailable",
+        ]
         assert stack.chatwoot.conversations[16]["status"] == "open"
         assert metrics(stack)["processed"] == {"fallback": 1}
         # A second failing message in the same conversation does not repeat it.

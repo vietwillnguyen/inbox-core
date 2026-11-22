@@ -21,66 +21,6 @@
       }
     },
     "schemas": {
-      "agent": {
-        "properties": {
-          "account_id": {
-            "type": "integer"
-          },
-          "auto_offline": {
-            "description": "Whether the agent is automatically marked offline when they are away.",
-            "type": "boolean"
-          },
-          "availability_status": {
-            "description": "The effective availability status of the agent, derived from the configured availability, auto-offline setting, and current presence. To update an agent's configured availability, use the availability field in create or update requests.",
-            "enum": [
-              "online",
-              "busy",
-              "offline"
-            ],
-            "readOnly": true,
-            "type": "string"
-          },
-          "available_name": {
-            "description": "The available name of the agent",
-            "type": "string"
-          },
-          "confirmed": {
-            "description": "Whether the agent has confirmed their email address.",
-            "type": "boolean"
-          },
-          "custom_role_id": {
-            "description": "The custom role id of the agent",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "email": {
-            "description": "The email of the agent",
-            "type": "string"
-          },
-          "id": {
-            "type": "integer"
-          },
-          "name": {
-            "description": "The name of the agent",
-            "type": "string"
-          },
-          "role": {
-            "description": "The role of the agent",
-            "enum": [
-              "agent",
-              "administrator"
-            ],
-            "type": "string"
-          },
-          "thumbnail": {
-            "description": "The thumbnail of the agent",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
       "bad_request_error": {
         "properties": {
           "description": {
@@ -94,77 +34,6 @@
           }
         },
         "title": "data",
-        "type": "object"
-      },
-      "contact": {
-        "properties": {
-          "payload": {
-            "items": {
-              "properties": {
-                "additional_attributes": {
-                  "description": "The object containing additional attributes related to the contact",
-                  "type": "object"
-                },
-                "availability_status": {
-                  "description": "The availability status of the contact",
-                  "type": "string"
-                },
-                "blocked": {
-                  "description": "Whether the contact is blocked",
-                  "type": "boolean"
-                },
-                "contact_inboxes": {
-                  "items": {
-                    "$ref": "#/components/schemas/contact_inboxes"
-                  },
-                  "type": "array"
-                },
-                "created_at": {
-                  "description": "The created at of the contact",
-                  "type": "integer"
-                },
-                "custom_attributes": {
-                  "description": "The custom attributes of the contact",
-                  "example": {
-                    "attribute_key": "attribute_value",
-                    "signed_up_at": "dd/mm/yyyy"
-                  },
-                  "type": "object"
-                },
-                "email": {
-                  "description": "The email address of the contact",
-                  "type": "string"
-                },
-                "id": {
-                  "description": "The ID of the contact",
-                  "type": "integer"
-                },
-                "identifier": {
-                  "description": "The identifier of the contact",
-                  "type": "string"
-                },
-                "last_activity_at": {
-                  "description": "The last activity at of the contact",
-                  "type": "integer"
-                },
-                "name": {
-                  "description": "The name of the contact",
-                  "type": "string"
-                },
-                "phone_number": {
-                  "description": "The phone number of the contact",
-                  "type": "string"
-                },
-                "thumbnail": {
-                  "description": "The thumbnail of the contact",
-                  "type": "string"
-                }
-              },
-              "type": "object"
-            },
-            "type": "array"
-          }
-        },
         "type": "object"
       },
       "contact_conversations_response": {
@@ -265,18 +134,6 @@
               ]
             },
             "type": "array"
-          }
-        },
-        "type": "object"
-      },
-      "contact_inboxes": {
-        "properties": {
-          "inbox": {
-            "$ref": "#/components/schemas/inbox_contact"
-          },
-          "source_id": {
-            "description": "Contact Inbox Source Id",
-            "type": "string"
           }
         },
         "type": "object"
@@ -1133,35 +990,6 @@
           "working_hours_enabled": {
             "description": "The flag which shows whether working hours feature is enabled",
             "type": "boolean"
-          }
-        },
-        "type": "object"
-      },
-      "inbox_contact": {
-        "properties": {
-          "avatar_url": {
-            "description": "The avatar image of the inbox",
-            "type": "string"
-          },
-          "channel_id": {
-            "description": "The ID of the channel",
-            "type": "number"
-          },
-          "channel_type": {
-            "description": "The type of the inbox",
-            "type": "string"
-          },
-          "id": {
-            "description": "ID of the inbox",
-            "type": "number"
-          },
-          "name": {
-            "description": "The name of the inbox",
-            "type": "string"
-          },
-          "provider": {
-            "description": "The provider of the inbox",
-            "type": "string"
           }
         },
         "type": "object"
@@ -2037,115 +1865,6 @@
       }
     },
     "/api/v1/accounts/{account_id}/conversations/{conversation_id}/messages": {
-      "get": {
-        "description": "List all messages of a conversation",
-        "operationId": "list-all-messages",
-        "parameters": [
-          {
-            "description": "Fetch messages after the message with this ID. Returns up to 100 messages in ascending order.",
-            "in": "query",
-            "name": "after",
-            "schema": {
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Fetch messages before the message with this ID. Returns up to 20 messages in ascending order.",
-            "in": "query",
-            "name": "before",
-            "schema": {
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "meta": {
-                      "properties": {
-                        "additional_attributes": {
-                          "type": "object"
-                        },
-                        "agent_last_seen_at": {
-                          "format": "date-time",
-                          "type": [
-                            "string",
-                            "null"
-                          ]
-                        },
-                        "assignee": {
-                          "$ref": "#/components/schemas/agent"
-                        },
-                        "assignee_last_seen_at": {
-                          "format": "date-time",
-                          "type": [
-                            "string",
-                            "null"
-                          ]
-                        },
-                        "contact": {
-                          "$ref": "#/components/schemas/contact"
-                        },
-                        "labels": {
-                          "items": {
-                            "type": "string"
-                          },
-                          "type": "array"
-                        }
-                      },
-                      "type": "object"
-                    },
-                    "payload": {
-                      "description": "Array of messages",
-                      "items": {
-                        "$ref": "#/components/schemas/message"
-                      },
-                      "type": "array"
-                    }
-                  },
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Success"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/bad_request_error"
-                }
-              }
-            },
-            "description": "Unauthorized"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/bad_request_error"
-                }
-              }
-            },
-            "description": "Conversation not found"
-          }
-        },
-        "security": [
-          {
-            "userBearerAuth": []
-          },
-          {
-            "userApiKey": []
-          }
-        ],
-        "summary": "Get messages",
-        "tags": [
-          "Messages"
-        ]
-      },
       "parameters": [
         {
           "$ref": "#/components/parameters/account_id"

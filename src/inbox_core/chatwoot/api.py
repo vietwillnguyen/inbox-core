@@ -28,10 +28,7 @@ from inbox_core.chatwoot._chatwoot_api.api.conversations import (
     toggle_status_of_a_conversation,
 )
 from inbox_core.chatwoot._chatwoot_api.api.inboxes import list_all_inboxes
-from inbox_core.chatwoot._chatwoot_api.api.messages import (
-    create_a_new_message_in_a_conversation,
-    list_all_messages,
-)
+from inbox_core.chatwoot._chatwoot_api.api.messages import create_a_new_message_in_a_conversation
 from inbox_core.chatwoot._chatwoot_api.api.profile import fetch_profile
 from inbox_core.chatwoot._chatwoot_api.client import AuthenticatedClient
 from inbox_core.chatwoot._chatwoot_api.models.assign_a_conversation_body import (
@@ -51,9 +48,7 @@ from inbox_core.chatwoot._chatwoot_api.models.conversation_show import Conversat
 from inbox_core.chatwoot._chatwoot_api.models.list_all_inboxes_response_200 import (
     ListAllInboxesResponse200,
 )
-from inbox_core.chatwoot._chatwoot_api.models.list_all_messages_response_200 import (
-    ListAllMessagesResponse200,
-)
+from inbox_core.chatwoot._chatwoot_api.models.message import Message
 from inbox_core.chatwoot._chatwoot_api.models.toggle_status_of_a_conversation_body import (
     ToggleStatusOfAConversationBody,
 )
@@ -83,8 +78,26 @@ class ChatwootError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class MessageFacts:
+    """One message as Chatwoot's API reports it. ``content`` is hidden from ``repr``."""
+
+    id: int
+    message_type: str
+    private: bool
+    sender_type: str
+    content: str = field(repr=False)
+
+
+@dataclass(frozen=True)
 class ConversationFacts:
-    """What the connection reads about one conversation."""
+    """What the connection reads about one conversation.
+
+    ``latest`` is the conversation's most recent message that is not an
+    activity message, as ``GET .../conversations/{id}`` reports it; that call
+    is one an agent bot's token may make (``BOT_ACCESSIBLE_ENDPOINTS`` in
+    ``app/controllers/concerns/access_token_auth_helper.rb``), unlike listing
+    messages.
+    """
 
     id: int
     account_id: int
@@ -92,19 +105,7 @@ class ConversationFacts:
     status: str
     labels: tuple[str, ...]
     contact_id: int | None
-
-
-@dataclass(frozen=True)
-class MessageFacts:
-    """One message as Chatwoot's API reports it. ``content`` is hidden from ``repr``."""
-
-    id: int
-    conversation_id: int
-    message_type: str
-    private: bool
-    sender_type: str
-    sender_id: int | None
-    content: str = field(repr=False)
+    latest: MessageFacts | None = None
 
 
 @dataclass(frozen=True)
@@ -139,6 +140,20 @@ def _int(value: object) -> int | None:
 
 def _str(value: object) -> str:
     return "" if isinstance(value, Unset) or value is None else str(value)
+
+
+def _message_facts(message: Message) -> MessageFacts | None:
+    found = _int(message.id)
+    if found is None:
+        return None
+    kind = message.message_type
+    return MessageFacts(
+        id=found,
+        message_type=MESSAGE_TYPES.get(kind, "") if isinstance(kind, int) else "",
+        private=message.private is True,
+        sender_type=_str(message.sender_type),
+        content=_str(message.content),
+    )
 
 
 class ChatwootApi:
@@ -281,6 +296,7 @@ class ChatwootApi:
             sender = getattr(meta, "sender", UNSET)
             contact = _int(getattr(sender, "id", None))
         labels = () if isinstance(parsed.labels, Unset) else tuple(parsed.labels)
+        latest = parsed.last_non_activity_message
         return ConversationFacts(
             id=found,
             account_id=account if account is not None else self.account_id,
@@ -288,33 +304,8 @@ class ChatwootApi:
             status=_str(parsed.status),
             labels=labels,
             contact_id=contact,
+            latest=_message_facts(latest) if isinstance(latest, Message) else None,
         )
-
-    def find_message(self, conversation_id: int, message_id: int) -> MessageFacts | None:
-        """The message with this id in the conversation, as the API reports it."""
-        response = self._check(
-            "list messages",
-            lambda: list_all_messages.sync_detailed(
-                self.account_id, conversation_id, client=self._client, after=message_id - 1
-            ),
-        )
-        parsed = response.parsed
-        if not isinstance(parsed, ListAllMessagesResponse200) or isinstance(parsed.payload, Unset):
-            raise ChatwootError("list messages", int(response.status_code))
-        for message in parsed.payload:
-            if _int(message.id) != message_id:
-                continue
-            kind = message.message_type
-            return MessageFacts(
-                id=message_id,
-                conversation_id=_int(message.conversation_id) or conversation_id,
-                message_type=MESSAGE_TYPES.get(kind, "") if isinstance(kind, int) else "",
-                private=bool(message.private) if not isinstance(message.private, Unset) else False,
-                sender_type=_str(message.sender_type),
-                sender_id=_int(message.sender_id),
-                content=_str(message.content),
-            )
-        return None
 
     def profile(self, user_token: str) -> AgentProfile:
         """Who ``user_token`` belongs to, asked of Chatwoot with that token."""

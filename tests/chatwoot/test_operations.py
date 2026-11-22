@@ -95,6 +95,30 @@ class TestChatwootRetention:
         assert sorted(fake.conversations) == [3, 4]
         assert fake.contacts == {71, 72}
 
+    def test_it_waits_for_chatwoots_background_delete_before_checking_contacts(self) -> None:
+        fake = FakeChatwoot(delete_lag=3)
+        fake.conversation(1, contact=70)
+        admin = ChatwootApi(
+            "http://chatwoot.test", ACCOUNT, ADMIN_TOKEN, transport=fake.transport()
+        )
+        slept: list[float] = []
+        report = run_chatwoot_retention(admin, days=30, clock=lambda: NOW, sleep=slept.append)
+        assert (report.conversations_deleted, report.contacts_deleted) == (1, 1)
+        assert fake.contacts == set()
+        assert slept
+
+    def test_a_delete_that_never_lands_keeps_the_contact_and_counts_a_failure(self) -> None:
+        fake = FakeChatwoot(delete_lag=10_000)
+        fake.conversation(1, contact=70)
+        admin = ChatwootApi(
+            "http://chatwoot.test", ACCOUNT, ADMIN_TOKEN, transport=fake.transport()
+        )
+        report = run_chatwoot_retention(
+            admin, days=30, clock=lambda: NOW, sleep=lambda _: None, wait_seconds=1.0
+        )
+        assert (report.contacts_deleted, report.failures) == (0, 1)
+        assert 70 in fake.contacts
+
     def test_the_bots_token_cannot_delete_and_failures_are_counted(self) -> None:
         fake = FakeChatwoot()
         fake.conversation(1, contact=70)

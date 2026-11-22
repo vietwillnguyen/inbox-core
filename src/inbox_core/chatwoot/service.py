@@ -76,6 +76,8 @@ __all__ = ["CHANNEL", "ChatwootService", "Submit", "create_app", "thread_submit"
 logger = logging.getLogger("inbox_core.chatwoot")
 
 CHANNEL = "chatwoot"
+SEEN_LABEL = "inbox-core"
+"""Put on every conversation the service processes; see ``deploy/chatwoot/seed.rb``."""
 RETRY_DELAYS = (0.5, 1.0, 2.0, 4.0)
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -201,7 +203,9 @@ class ChatwootService:
                 self._count("ignored", event.why_ignored)
                 return {"status": "ignored"}
             self._count("accepted", event.kind)
-            self._submit(lambda: self._handle(event))
+            content = payload.get("content")
+            text = content if isinstance(content, str) else ""
+            self._submit(lambda: self._handle(event, text))
             return {"status": "accepted"}
         except Exception as exc:
             # Answer 200 whatever happened: a 500 makes Chatwoot log the payload.
@@ -211,13 +215,13 @@ class ChatwootService:
 
     # ---- the worker -------------------------------------------------------
 
-    def _handle(self, event: WebhookEvent) -> None:
+    def _handle(self, event: WebhookEvent, text: str) -> None:
         conversation_id = event.conversation_id or 0
         record: AuditRecord | None = None
         failure = ""
         for attempt, delay in enumerate((*RETRY_DELAYS, None)):
             try:
-                record = self._handle_once(event)
+                record = self._handle_once(event, text)
             except _Refused as refused:
                 self._count("rejected", refused.reason)
                 logger.warning(
@@ -248,15 +252,30 @@ class ChatwootService:
                 conversation_id, failure, holding_delivered=delivered in ("sent", "held")
             )
 
-    def _handle_once(self, event: WebhookEvent) -> AuditRecord:
+    def _handle_once(self, event: WebhookEvent, text: str) -> AuditRecord:
         conversation_id, message_id = event.conversation_id or 0, event.message_id or 0
-        facts = self._api.find_message(conversation_id, message_id)
-        if facts is None:
-            raise _Refused(0, "", "message not found in Chatwoot")
-        self._check_facts(event, facts)
+        # The signature already proved Chatwoot sent this. Re-reading the
+        # conversation (the one read a bot token may make) confirms it is in
+        # this account and that the message is not newer than Chatwoot's
+        # latest; when it is the latest, Chatwoot's own copy must agree on
+        # who sent it and its text is what the core reads.
         conversation = self._api.get_conversation(conversation_id)
         if conversation.account_id != self._settings.account_id:
             raise _Refused(0, "", "another account")
+        latest = conversation.latest
+        if latest is None or message_id > latest.id:
+            raise _Refused(0, "", "message not found in Chatwoot")
+        if latest.id == message_id:
+            self._check_facts(event, latest)
+            text = latest.content
+        if SEEN_LABEL not in conversation.labels:
+            # Marks the conversation as one this service has seen, which is
+            # what keeps Chatwoot's service-down rule (opened with no labels)
+            # from firing when a person takes it over. Best effort.
+            try:
+                self._api.add_labels(conversation_id, (SEEN_LABEL,))
+            except ChatwootError as exc:
+                logger.warning("could not label conversation %s: %s", conversation_id, exc.status)
         contact = conversation.contact_id if conversation.contact_id is not None else "unknown"
         sender_key = make_sender_key(f"chatwoot-contact:{conversation.account_id}:{contact}")
         thread_key = str(conversation_id)
@@ -271,7 +290,7 @@ class ChatwootService:
                 provider_message_id=str(message_id),
                 sender_key=sender_key,
                 sender_address=f"chatwoot-conversation:{conversation_id}",
-                text=facts.content,
+                text=text,
                 received_at=datetime.fromtimestamp(self._clock(), tz=UTC),
             )
         )

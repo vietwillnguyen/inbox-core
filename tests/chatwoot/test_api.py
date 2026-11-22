@@ -80,22 +80,46 @@ def test_get_conversation_reads_its_facts() -> None:
     )
 
 
-def test_find_message_returns_the_api_view_or_none() -> None:
+def test_get_conversation_reports_the_latest_message_a_bot_may_read() -> None:
     fake = FakeChatwoot()
     fake.conversation(4)
     fake.message(10, 4, "Hi there")
     fake.message(11, 4, "From staff", message_type=1, sender_type="User")
-    client = api(fake)
-    found = client.find_message(4, 11)
-    assert found is not None
-    assert (found.message_type, found.sender_type, found.private, found.content) == (
+    fake.message(12, 4, "Conversation was opened", message_type=2, sender_type="")
+    latest = api(fake).get_conversation(4).latest
+    assert latest is not None
+    assert (latest.id, latest.message_type, latest.sender_type, latest.private) == (
+        11,
         "outgoing",
         "User",
         False,
-        "From staff",
     )
-    assert "From staff" not in repr(found)
-    assert client.find_message(4, 12) is None
+    assert latest.content == "From staff"
+    assert "From staff" not in repr(latest)
+
+
+def test_a_conversation_with_no_messages_has_no_latest() -> None:
+    fake = FakeChatwoot()
+    fake.conversation(4)
+    assert api(fake).get_conversation(4).latest is None
+
+
+def test_a_latest_message_without_an_id_is_none() -> None:
+    _, client = recording(
+        200, {"id": 4, "inbox_id": 1, "last_non_activity_message": {"content": "x"}}
+    )
+    assert client.get_conversation(4).latest is None
+
+
+def test_a_bot_token_may_not_list_messages() -> None:
+    fake = FakeChatwoot()
+    fake.conversation(4)
+    with httpx.Client(transport=fake.transport()) as client:
+        response = client.get(
+            "http://chatwoot.test/api/v1/accounts/1/conversations/4/messages",
+            headers={"api_access_token": BOT_TOKEN},
+        )
+    assert response.status_code == 401
 
 
 def test_profile_and_inboxes_are_asked_with_the_agents_own_token() -> None:
@@ -156,7 +180,6 @@ def test_no_connection_is_status_zero() -> None:
     [
         (lambda c: c.get_conversation(4), {"inbox_id": "x"}),
         (lambda c: c.get_conversation(4), {"status": "archived"}),
-        (lambda c: c.find_message(4, 1), {"meta": {}}),
         (lambda c: c.profile("t"), {"name": "no id"}),
         (lambda c: c.inbox_ids("t"), {}),
         (lambda c: c.list_conversations(1), {}),

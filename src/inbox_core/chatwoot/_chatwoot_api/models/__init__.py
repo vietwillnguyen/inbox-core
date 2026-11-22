@@ -1,10 +1,6 @@
 """Contains all the data models used in inputs/outputs"""
 
-from .agent import Agent
-from .agent_availability_status import AgentAvailabilityStatus
-from .agent_role import AgentRole
 from .assign_a_conversation_body import AssignAConversationBody
-from .contact import Contact
 from .contact_conversations_response import ContactConversationsResponse
 from .contact_conversations_response_payload_item import ContactConversationsResponsePayloadItem
 from .contact_conversations_response_payload_item_meta import (
@@ -19,10 +15,6 @@ from .contact_conversations_response_payload_item_meta_sender_additional_attribu
 from .contact_conversations_response_payload_item_meta_sender_custom_attributes import (
     ContactConversationsResponsePayloadItemMetaSenderCustomAttributes,
 )
-from .contact_inboxes import ContactInboxes
-from .contact_payload_item import ContactPayloadItem
-from .contact_payload_item_additional_attributes import ContactPayloadItemAdditionalAttributes
-from .contact_payload_item_custom_attributes import ContactPayloadItemCustomAttributes
 from .conversation import Conversation
 from .conversation_add_labels_body import ConversationAddLabelsBody
 from .conversation_additional_attributes import ConversationAdditionalAttributes
@@ -100,14 +92,8 @@ from .data import Data
 from .generic_id import GenericId
 from .inbox import Inbox
 from .inbox_auto_assignment_config import InboxAutoAssignmentConfig
-from .inbox_contact import InboxContact
 from .inbox_working_hours_item import InboxWorkingHoursItem
 from .list_all_inboxes_response_200 import ListAllInboxesResponse200
-from .list_all_messages_response_200 import ListAllMessagesResponse200
-from .list_all_messages_response_200_meta import ListAllMessagesResponse200Meta
-from .list_all_messages_response_200_meta_additional_attributes import (
-    ListAllMessagesResponse200MetaAdditionalAttributes,
-)
 from .message import Message
 from .message_additional_attributes import MessageAdditionalAttributes
 from .message_attachment_type_0 import MessageAttachmentType0
@@ -148,21 +134,13 @@ from .user_role import UserRole
 from .user_ui_settings import UserUiSettings
 
 __all__ = (
-    "Agent",
-    "AgentAvailabilityStatus",
-    "AgentRole",
     "AssignAConversationBody",
-    "Contact",
     "ContactConversationsResponse",
     "ContactConversationsResponsePayloadItem",
     "ContactConversationsResponsePayloadItemMeta",
     "ContactConversationsResponsePayloadItemMetaSender",
     "ContactConversationsResponsePayloadItemMetaSenderAdditionalAttributes",
     "ContactConversationsResponsePayloadItemMetaSenderCustomAttributes",
-    "ContactInboxes",
-    "ContactPayloadItem",
-    "ContactPayloadItemAdditionalAttributes",
-    "ContactPayloadItemCustomAttributes",
     "Conversation",
     "ConversationAdditionalAttributes",
     "ConversationAddLabelsBody",
@@ -204,12 +182,8 @@ __all__ = (
     "GenericId",
     "Inbox",
     "InboxAutoAssignmentConfig",
-    "InboxContact",
     "InboxWorkingHoursItem",
     "ListAllInboxesResponse200",
-    "ListAllMessagesResponse200",
-    "ListAllMessagesResponse200Meta",
-    "ListAllMessagesResponse200MetaAdditionalAttributes",
     "Message",
     "MessageAdditionalAttributes",
     "MessageAttachmentType0",
