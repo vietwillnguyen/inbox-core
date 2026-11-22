@@ -1,0 +1,83 @@
+# Chatwoot Community Edition plus the inbox-core service, for one client.
+# Adapted from Chatwoot's docker-compose.production.yaml at v4.19.1.
+#
+# Everything published binds to 127.0.0.1 only. The project name is fixed so
+# every command touches these containers and volumes and nothing else.
+# Run it with ./stack.sh, which writes the gitignored .local/ files first.
+name: inboxcore
+
+x-chatwoot: &chatwoot
+  # The -ce image is built with enterprise/ deleted: MIT only. Pinned; upgrade on purpose.
+  image: chatwoot/chatwoot:v4.19.1-ce
+  env_file: .local/chatwoot.env
+  environment:
+    NODE_ENV: production
+    RAILS_ENV: production
+    INSTALLATION_ENV: docker
+  volumes:
+    - storage_data:/app/storage
+  depends_on:
+    - postgres
+    - redis
+  restart: "no"
+
+services:
+  rails:
+    <<: *chatwoot
+    ports:
+      - "127.0.0.1:${CHATWOOT_PORT:-3910}:3000"
+    entrypoint: docker/entrypoints/rails.sh
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+
+  sidekiq:
+    <<: *chatwoot
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: "no"
+    env_file: .local/chatwoot.env
+    environment:
+      POSTGRES_DB: chatwoot
+      POSTGRES_USER: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    restart: "no"
+    env_file: .local/chatwoot.env
+    command: ["sh", "-c", "redis-server --requirepass \"$$REDIS_PASSWORD\""]
+    volumes:
+      - redis_data:/data
+
+  inbox-core:
+    build:
+      context: ../..
+      dockerfile: deploy/chatwoot/Dockerfile
+    image: inboxcore/inbox-core:local
+    env_file: .local/service.env
+    ports:
+      - "127.0.0.1:${SERVICE_PORT:-3912}:8000"
+    volumes:
+      - service_data:/data
+      - ./.local/client.toml:/config/client.toml:ro
+    depends_on:
+      - rails
+    restart: "no"
+
+  # A page with the Chatwoot website widget on it, standing in for a client's site.
+  widget-demo:
+    image: busybox:1.37
+    command: ["httpd", "-f", "-v", "-p", "8080", "-h", "/www"]
+    volumes:
+      - ./.local/demo:/www:ro
+    ports:
+      - "127.0.0.1:${DEMO_PORT:-3911}:8080"
+    restart: "no"
+
+volumes:
+  storage_data:
+  postgres_data:
+  redis_data:
+  service_data:

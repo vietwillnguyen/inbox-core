@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brambleford Tool Library</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; color: #22272e; background: #f6f5f1; }
+  header { background: #2f5d50; color: #fff; padding: 28px 20px; }
+  header h1 { margin: 0; font-size: 26px; }
+  header p { margin: 6px 0 0; opacity: 0.85; }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 20px 120px; }
+  .note { background: #fff; border: 1px solid #e2dfd6; border-radius: 10px; padding: 16px 18px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Brambleford Tool Library</h1>
+  <p>A made-up, volunteer-run library that lends tools. This page exists to host the chat widget.</p>
+</header>
+<main>
+  <div class="note">
+    <p>Open the chat bubble in the corner and ask about opening hours, borrowing or workshops.</p>
+  </div>
+</main>
+<script>
+  (function (d, t) {
+    var BASE_URL = "{{CHATWOOT_ORIGIN}}";
+    var g = d.createElement(t), s = d.getElementsByTagName(t)[0];
+    g.src = BASE_URL + "/packs/js/sdk.js";
+    g.async = true;
+    s.parentNode.insertBefore(g, s);
+    g.onload = function () {
+      window.chatwootSDK.run({ websiteToken: "{{WEBSITE_TOKEN}}", baseUrl: BASE_URL });
+    };
+  })(document, "script");
+</script>
+</body>
+</html>
