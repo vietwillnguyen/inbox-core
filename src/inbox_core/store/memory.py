@@ -97,6 +97,12 @@ class InMemoryConversationStore:
         """The conversation with this id, if any."""
         return self._conversations.get(conversation_id)
 
+    def find_conversation(self, channel: str, thread_key: str) -> Conversation | None:
+        """The conversation for this thread, if it exists."""
+        with self._lock:
+            found = self._threads.get((channel, thread_key))
+            return None if found is None else self._conversations[found]
+
     def is_handled(self, channel: str, provider_message_id: str) -> bool:
         """True only when the inbound row has ``handled_at``."""
         with self._lock:

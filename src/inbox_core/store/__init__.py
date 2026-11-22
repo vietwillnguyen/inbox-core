@@ -131,6 +131,10 @@ class ConversationStore(Protocol):
         """The conversation with this id, if any."""
         ...
 
+    def find_conversation(self, channel: str, thread_key: str) -> Conversation | None:
+        """The conversation for this thread, if it exists. Never creates one."""
+        ...
+
     def is_handled(self, channel: str, provider_message_id: str) -> bool:
         """True only when this inbound message reached a terminal state."""
         ...

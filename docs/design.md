@@ -208,6 +208,13 @@ Errors name the setting, the key id and caller-supplied ids, never key material 
 
 Decisions are `duplicate`, `left_for_person`, `dropped`, `skipped`, `answered`, `answer_held`, `handed_off` and `incomplete`.
 
+### A person replied
+
+`Pipeline.person_replied(channel, thread_key, sender_key, message_id=...)` is the entry point for "a person replied in this conversation".
+It sets the conversation to `paused_manual`, the stronger of the two paused states, and returns an audit record with decision `person_replied`.
+Every later message there is `left_for_person`, without a classifier call, until `Pipeline.resume(channel, thread_key)` gives it back; a hand-off never overrides it.
+A message already being processed when the person replies checks the conversation again right before it delivers anything (an answer or a holding message) and before it hands off, and then stays silent: it is marked handled as `left_for_person`, with nothing sent and nobody notified.
+
 It fails closed in three specific ways:
 
 - A handler that declines or raises, a delivery that fails, delivery being off, and the reply cap all become a hand-off, never a silent drop.

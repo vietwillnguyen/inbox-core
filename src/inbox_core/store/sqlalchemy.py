@@ -217,6 +217,15 @@ class SqlAlchemyConversationStore:
             )
         return None if row is None else _conversation(row)
 
+    def find_conversation(self, channel: str, thread_key: str) -> Conversation | None:
+        """The conversation for this thread, if it exists."""
+        query = select(conversations).where(
+            conversations.c.channel == channel, conversations.c.thread_key == thread_key
+        )
+        with self._engine.begin() as connection:
+            row = connection.execute(query).mappings().first()
+        return None if row is None else _conversation(row)
+
     def _inbound_query(self, channel: str, provider_message_id: str) -> Any:
         return select(messages).where(
             messages.c.channel == channel,

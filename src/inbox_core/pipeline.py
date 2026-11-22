@@ -92,8 +92,9 @@ Decision = Literal[
     "answer_held",
     "handed_off",
     "incomplete",
+    "person_replied",
 ]
-"""What the pipeline did with a message."""
+"""What the pipeline did with a message; ``person_replied`` comes from ``person_replied``."""
 
 UNAVAILABLE = "unavailable"
 HOLDING_KIND = "holding"
@@ -215,6 +216,13 @@ class _Incomplete(Exception):  # noqa: N818 - private control flow, not an error
 
 class _Unfinished(Exception):  # noqa: N818 - private control flow, not an error type
     """An earlier attempt to deliver this reply did not finish; do not repeat it."""
+
+
+class _PersonTookOver(Exception):  # noqa: N818 - private control flow, not an error type
+    """A person replied while this message was being processed; stay silent."""
+
+
+PERSON_REPLIED = "a person replied in this conversation"
 
 
 @dataclass
@@ -377,6 +385,22 @@ class Pipeline:
             draft.reason = "a person owns this conversation"
             return
 
+        try:
+            self._decide_and_act(message, conversation, row, draft)
+        except _PersonTookOver:
+            store.mark_handled(row.id, "left_for_person")
+            draft.decision = "left_for_person"
+            draft.reason = "a person replied while this message was processed"
+            draft.delivery = ""
+
+    def _decide_and_act(
+        self,
+        message: IncomingMessage,
+        conversation: Conversation,
+        row: StoredMessage,
+        draft: _Draft,
+    ) -> None:
+        store = self._store
         guarded = run_guards(self._guards, message)
         if guarded is not None:
             draft.guard = guarded.guard
@@ -482,6 +506,8 @@ class Pipeline:
             )
         except _Unfinished:
             return "an earlier delivery attempt did not finish"
+        except _PersonTookOver:
+            raise
         except Exception as exc:
             logger.warning(
                 "delivery failed for %s: %s", message.provider_message_id, type(exc).__name__
@@ -511,6 +537,7 @@ class Pipeline:
         unfinished or failed one raises :class:`_Unfinished`: it may or may not
         have reached the public, and the safe reading is "do not send again".
         """
+        self._ensure_bot_owns(conversation.id)
         earlier = [m for m in self._store.outbound_for(row.id) if m.kind == reply.kind]
         if earlier:
             last = earlier[-1]
@@ -576,6 +603,8 @@ class Pipeline:
                 draft.held_because = delivered.held_because
             except _Unfinished:
                 draft.delivery = "none"
+            except _PersonTookOver:
+                raise
             except Exception as exc:
                 # A failed holding message must not stop the hand-off itself.
                 draft.delivery = "failed"
@@ -586,6 +615,7 @@ class Pipeline:
                 )
 
         tier: Tier = decision.tier
+        self._ensure_bot_owns(conversation.id)
         self._bring_in_a_person("hand_off", message, tier, draft.reason, draft)
         try:
             self._notifier.notify(self._escalation(message, draft, tier))
@@ -594,6 +624,62 @@ class Pipeline:
         self._store.pause(conversation.id, f"{tier}: {draft.reason}"[:256])
         self._store.mark_handled(row.id, "handed_off")
         draft.decision = "handed_off"
+
+    def _ensure_bot_owns(self, conversation_id: int) -> None:
+        """Raise :class:`_PersonTookOver` if a person replied since processing began."""
+        current = self._store.get_conversation(conversation_id)
+        if current is not None and current.status == "paused_manual":
+            raise _PersonTookOver
+
+    def person_replied(
+        self, channel: str, thread_key: str, sender_key: str, *, message_id: str
+    ) -> AuditRecord:
+        """Record that a person replied in this conversation; the bot stays silent there.
+
+        Every later message in the conversation is ``left_for_person`` until
+        :meth:`resume`. A message already being processed checks again right
+        before it delivers anything, so the bot does not answer over the
+        person. ``sender_key`` is the visitor's, used only if the conversation
+        is new to the store. ``message_id`` is the person's message, for the
+        audit record. Returns that record, with decision ``person_replied``.
+        """
+        incoming = IncomingMessage(
+            channel=channel,
+            thread_key=thread_key,
+            provider_message_id=message_id,
+            sender_key=sender_key,
+            sender_address="",
+            text="",
+        )
+        draft = _Draft(incoming, self._mode.value)
+        try:
+            conversation = self._store.conversation_for(channel, thread_key, sender_key)
+            draft.conversation_id = conversation.id
+            self._store.pause_manual(conversation.id)
+            draft.decision = "person_replied"
+            draft.reason = PERSON_REPLIED
+        except Exception as exc:
+            draft.decision = "incomplete"
+            draft.reason = f"internal error ({type(exc).__name__})"
+            logger.error("person reply %s: internal error %s", message_id, type(exc).__name__)
+        record = draft.freeze(self._clock())
+        try:
+            self._audit.emit(record)
+        except Exception as exc:
+            logger.error("audit sink failed for %s: %s", message_id, type(exc).__name__)
+        return record
+
+    def resume(self, channel: str, thread_key: str) -> bool:
+        """Give a conversation back to the bot. A person's decision; False if it is unknown.
+
+        The bot reply count is kept, so resuming does not reset the
+        per-conversation cap.
+        """
+        found = self._store.find_conversation(channel, thread_key)
+        if found is None:
+            return False
+        self._store.resume(found.id)
+        return True
 
     def _bring_in_a_person(
         self,
