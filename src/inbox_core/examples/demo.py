@@ -34,7 +34,12 @@ from inbox_core.handlers import (
     HandlerRegistry,
     Template,
 )
-from inbox_core.knowledge import InMemoryRetriever, KnowledgeEntry, load_markdown_knowledge
+from inbox_core.knowledge import (
+    DEFAULT_STOPWORDS,
+    InMemoryRetriever,
+    KnowledgeEntry,
+    load_markdown_knowledge,
+)
 from inbox_core.messages import IncomingMessage, OutboundReply, make_sender_key
 from inbox_core.pipeline import AuditSink, Escalation, InMemoryAuditSink, Notifier, Pipeline
 from inbox_core.store.memory import InMemoryConversationStore
@@ -47,6 +52,7 @@ __all__ = [
     "build_pipeline",
     "example_config",
     "example_knowledge",
+    "example_retriever",
     "main",
 ]
 
@@ -65,6 +71,23 @@ def example_config() -> ClientConfig:
 def example_knowledge() -> tuple[KnowledgeEntry, ...]:
     """The Brambleford Tool Library's knowledge entries."""
     return load_markdown_knowledge(EXAMPLE_DIR / "knowledge.md")
+
+
+EXAMPLE_STOPWORDS = DEFAULT_STOPWORDS | {
+    "library",
+    "biblioteca",
+    "tool",
+    "tools",
+    "herramienta",
+    "herramientas",
+    "brambleford",
+}
+"""Words every message to this library contains, so they carry no signal for retrieval."""
+
+
+def example_retriever() -> InMemoryRetriever:
+    """BM25 over the example's knowledge, with its domain stop words."""
+    return InMemoryRetriever(example_knowledge(), stopwords=EXAMPLE_STOPWORDS)
 
 
 def _rx(*words: str) -> re.Pattern[str]:
@@ -240,7 +263,7 @@ def build_pipeline(
     handlers = HandlerRegistry(
         {
             "faq": GroundedAnswer(
-                InMemoryRetriever(example_knowledge()),
+                example_retriever(),
                 generator or ExtractiveGenerator(),
                 min_score=MIN_SCORE,
                 limit=3 if generator is not None else 1,

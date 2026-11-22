@@ -4,17 +4,17 @@ The Brambleford Tool Library is made up, and so is the town of Brambleford.
 Nothing here describes a real organisation, place or person.
 
 ## TL-01 Opening hours
-Keywords: horario, abierto, abren, cierran, hora, sábado, sabado, miércoles, miercoles
+Keywords: when, open, opening, hours, times, closed, today, sunday, monday, tuesday, thursday, friday, horario, abierto, abren, cierran, hora, sábado, sabado, miércoles, miercoles
 The library is open on Wednesdays from 5pm to 8pm and on Saturdays from 10am to 2pm.
 It is closed on every other day.
 
 ## TL-02 Location
-Keywords: dónde, donde, dirección, direccion, ubicación, ubicacion, encuentra
+Keywords: where, address, located, find, entrance, dónde, donde, dirección, direccion, ubicación, ubicacion, encuentra
 The library is in the old bus depot at 4 Mill Yard, behind the Brambleford market hall.
 The entrance is the green door on the side of the building.
 
 ## TL-03 Parking and getting there
-Keywords: aparcar, aparcamiento, coche, autobús, autobus, bicicleta, llegar
+Keywords: bus, park, parking, car, bike, travel, aparcar, aparcamiento, coche, autobús, autobus, bicicleta, llegar
 There are four short-stay parking spaces in Mill Yard for loading tools.
 The number 7 bus stops at the market hall, two minutes' walk away, and there is a bike rack by the green door.
 
@@ -24,16 +24,16 @@ A tool library lends tools the way a book library lends books.
 Members borrow a tool, use it at home, and bring it back, so the town shares one good drill instead of owning a hundred.
 
 ## TL-05 Who can join
-Keywords: socio, socia, hacerse socio, quién, quien, unirse, requisitos, edad
+Keywords: eligible, eligibility, live, work, age, 18, años, edad, mayor, inscribir, hacerme, socio, socia, hacerse socio, quién, quien, unirse, requisitos
 Anyone aged 18 or over who lives or works in Brambleford can become a member.
 
 ## TL-06 How to join
-Keywords: hacerse socio, inscribirse, apuntarse, registrarse, carné, carne, documento
+Keywords: join, sign, register, member, membership, card, bring, hacerme, llevar, traer, hacerse socio, inscribirse, apuntarse, registrarse, carné, carne, documento
 Bring a photo ID and something showing your address to the front desk during opening hours.
 A volunteer sets up your membership card on the spot and you can borrow on the same day.
 
 ## TL-07 Loan period
-Keywords: cuánto tiempo, cuanto tiempo, plazo, préstamo, prestamo, días, dias, semana
+Keywords: long, keep, loan, borrow, days, cuánto tiempo, cuanto tiempo, plazo, préstamo, prestamo, días, dias, semana
 A loan lasts seven days.
 Tools are collected and returned during opening hours.
 
@@ -48,7 +48,7 @@ There are no late fines.
 A volunteer sends a friendly reminder, and members with an overdue tool cannot borrow another until it is back.
 
 ## TL-10 How many tools at once
-Keywords: cuántas, cuantas, varias, límite, limite, a la vez, número, numero
+Keywords: many, once, same, limit, cuántas, cuantas, varias, límite, limite, a la vez, número, numero
 Each member can borrow up to three tools at a time.
 
 ## TL-11 What tools there are

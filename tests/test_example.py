@@ -158,3 +158,51 @@ def test_the_example_passes_the_privacy_sweep(caplog: pytest.LogCaptureFixture) 
     assert report.processed == len(corpus)
     assert report.decisions["handed_off"] > 0
     assert report.decisions["answer_held"] > 0
+
+
+EXPECTED_TOP_ENTRY = {
+    "faq-en-hours": "TL-01",
+    "faq-en-location": "TL-02",
+    "faq-en-loan": "TL-07",
+    "faq-en-ladder": "TL-13",
+    "faq-en-repair-cafe": "TL-20",
+    "faq-en-limit": "TL-10",
+    "faq-es-hours": "TL-01",
+    "faq-es-location": "TL-02",
+    "faq-es-renew": "TL-08",
+    "faq-es-protection": "TL-15",
+    "faq-es-accessibility": "TL-23",
+    "membership-en-join": {"TL-05", "TL-06"},
+    "membership-en-eligibility": "TL-05",
+    "membership-es-join": {"TL-05", "TL-06"},
+    "membership-es-age": "TL-05",
+}
+
+
+def test_every_answerable_case_retrieves_the_entry_that_answers_it() -> None:
+    from inbox_core.evals.golden import answerable_cases
+
+    retriever = demo.example_retriever()
+    cases = answerable_cases(golden())
+    assert {case.id for case in cases} == set(EXPECTED_TOP_ENTRY)
+    for case in cases:
+        hits = retriever.search(f"{case.subject}\n{case.text}", limit=1)
+        assert hits, case.id
+        expected = EXPECTED_TOP_ENTRY[case.id]
+        allowed = expected if isinstance(expected, set) else {expected}
+        assert hits[0].entry.id in allowed, (case.id, hits[0].entry.id)
+        assert hits[0].score >= demo.MIN_SCORE, (case.id, hits[0].score)
+
+
+@pytest.mark.parametrize(
+    ("question", "entry"),
+    [
+        ("Where is the library?", "TL-02"),
+        ("When are you open?", "TL-01"),
+        ("How do I get there by bus?", "TL-03"),
+        ("Are you open on Sunday?", "TL-01"),
+    ],
+)
+def test_everyday_questions_find_their_entry(question: str, entry: str) -> None:
+    hits = demo.example_retriever().search(question, limit=1)
+    assert hits[0].entry.id == entry

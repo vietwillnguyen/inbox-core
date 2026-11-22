@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 __all__ = [
+    "DEFAULT_STOPWORDS",
     "InMemoryRetriever",
     "KnowledgeEntry",
     "Passage",
@@ -63,8 +64,6 @@ _ENGLISH_STOPWORDS = (
     "could",
     "would",
     "what",
-    "when",
-    "where",
     "how",
     "it",
     "its",
@@ -112,7 +111,11 @@ _SPANISH_STOPWORDS = (
     "al",
 )
 DEFAULT_STOPWORDS = frozenset((*_ENGLISH_STOPWORDS, *_SPANISH_STOPWORDS))
-"""A small English and Spanish stop list. Pass your own for other languages."""
+"""A small English and Spanish stop list. Pass your own for other languages.
+
+"when" and "where" are deliberately kept as search terms: in an inbox they carry
+the intent of the question (opening hours, location).
+"""
 
 
 @dataclass(frozen=True)
