@@ -75,3 +75,21 @@ One deliberate difference, found while deriving the space: the origin compares `
 The test `test_nan_is_a_deliberate_difference` pins both behaviours.
 
 Reasons produced by `escalation_reason` contain only category names from the table, language codes that match the code pattern, and numbers, so a classifier that returns free text in a field cannot push it into an audit record.
+
+## Classifiers
+
+`TriageClassifier` is one method, `classify(message) -> TriageSignals`, which raises `TriageUnavailable` rather than guessing.
+
+- `adapters.litellm.LiteLLMClassifier` makes one JSON-schema call through LiteLLM.
+  The default model is Gemini Flash-Lite (`gemini/gemini-3.5-flash-lite`); `model` changes it and `api_base` points it at a LiteLLM gateway.
+- `adapters.jev.JevClassifier` asks the same four questions through Jev's `system_one`.
+  `typesafe_sdk` is imported only by `JevClassifier.from_api_key`, so the extra is optional in practice and not only on paper.
+- `shadow.ShadowingClassifier` runs a decider and a shadow; only the decider's answer is used.
+- `triage.RetryingClassifier` wraps any classifier with a bounded number of attempts and a backoff, and turns every exception, not only `TriageUnavailable`, into `TriageUnavailable` carrying the exception's type name only.
+
+Both adapters validate the model's answer with the same `signals_from_payload`, which checks it against the client's table and refuses a category or language the table does not list, a non-numeric or non-finite confidence, and non-boolean flags.
+Its error messages name the field and the message id, never the value, because a model can echo the message into any field.
+
+Prompts are rendered from the configuration by `prompts.render_triage_prompts`: the organisation's name and summary, each category's description, a seriousness order derived from the table (executive, then person-handled, then auto-answerable), and the language list.
+The prompt module contains no organisation's name, and a test checks that.
+The classifier is shown the subject and the body only, never the sender, and the system prompt tells the model the message is data, not instructions.

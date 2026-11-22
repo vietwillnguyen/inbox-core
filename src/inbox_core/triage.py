@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import math
 import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Literal, Protocol, runtime_checkable
 
@@ -35,6 +37,7 @@ from inbox_core.messages import IncomingMessage
 __all__ = [
     "ESCALATING_TIERS",
     "TIERS",
+    "RetryingClassifier",
     "Tier",
     "TriageClassifier",
     "TriageDecision",
@@ -44,6 +47,7 @@ __all__ = [
     "derive_tier",
     "escalation_reason",
     "is_confident",
+    "signals_from_payload",
 ]
 
 Tier = Literal["auto_answer", "needs_admin", "needs_executive", "skip"]
@@ -186,3 +190,104 @@ def escalation_reason(signals: TriageSignals, policy: TriagePolicy) -> str:
     if policy.category(signals.category) is None:
         return "an unlisted category is handled by a person"
     return f"category {signals.category} is handled by a person"
+
+
+_SIGNAL_FLAGS = ("asks_for_human", "mentions_money_or_commitment")
+
+
+def signals_from_payload(
+    payload: object, policy: TriagePolicy, *, classifier: str, message_id: str
+) -> TriageSignals:
+    """Validate a classifier's raw answer against the client's table, or raise.
+
+    Shared by every adapter so they refuse the same things. A category outside
+    the table is a malformed answer, not a new category: mapping it to a
+    default would let a model typo choose a tier. Exception messages carry the
+    message id and the field name, never the offending value, because a model
+    can echo the message into any field.
+    """
+    if not isinstance(payload, dict):
+        raise TriageUnavailable(
+            f"{classifier} returned a {type(payload).__name__} for message {message_id}"
+        )
+    category = payload.get("category")
+    if not isinstance(category, str) or policy.category(category) is None:
+        raise TriageUnavailable(f"{classifier} returned an unknown category for {message_id}")
+    language = payload.get("language")
+    if not isinstance(language, str) or (language not in policy.languages and language != "other"):
+        raise TriageUnavailable(f"{classifier} returned an unknown language for {message_id}")
+
+    raw_confidence = payload.get("confidence")
+    if isinstance(raw_confidence, bool) or not isinstance(raw_confidence, int | float | str):
+        raise TriageUnavailable(f"{classifier} returned no numeric confidence for {message_id}")
+    try:
+        confidence = float(raw_confidence)
+    except ValueError:
+        raise TriageUnavailable(
+            f"{classifier} returned an unreadable confidence for {message_id}"
+        ) from None
+    if not math.isfinite(confidence):
+        raise TriageUnavailable(f"{classifier} returned a non-finite confidence for {message_id}")
+
+    for name in _SIGNAL_FLAGS:
+        if not isinstance(payload.get(name), bool):
+            raise TriageUnavailable(f"{classifier} returned a non-boolean {name} for {message_id}")
+
+    return TriageSignals(
+        category=category,
+        language=language,
+        confidence=max(0.0, min(1.0, confidence)),
+        asks_for_human=payload["asks_for_human"],
+        mentions_money_or_commitment=payload["mentions_money_or_commitment"],
+        classifier=classifier,
+    )
+
+
+class RetryingClassifier:
+    """A classifier that retries a bounded number of times, then fails closed.
+
+    Any exception from the inner classifier counts as unavailable, not only
+    :class:`TriageUnavailable`: a bug in an adapter must lead to a person, not
+    to a crash that leaves the message unhandled. Only the exception's type
+    name is kept, because a provider error can echo the prompt. ``sleep`` is
+    injectable so tests never wait.
+    """
+
+    def __init__(
+        self,
+        inner: TriageClassifier,
+        *,
+        attempts: int = 3,
+        backoff: tuple[float, ...] = (0.5, 2.0),
+        sleep: Callable[[float], object] = time.sleep,
+    ) -> None:
+        if attempts < 1:
+            raise ValueError("attempts must be at least 1")
+        self._inner = inner
+        self._attempts = attempts
+        self._backoff = backoff
+        self._sleep = sleep
+
+    @property
+    def name(self) -> str:
+        """The inner classifier's name, so audit records name the real model."""
+        return self._inner.name
+
+    def classify(self, message: IncomingMessage) -> TriageSignals:
+        """The inner classifier's signals, or :class:`TriageUnavailable` after the bound."""
+        last = "TriageUnavailable"
+        for attempt in range(self._attempts):
+            if attempt:
+                step = min(attempt - 1, len(self._backoff) - 1)
+                if step >= 0:
+                    self._sleep(self._backoff[step])
+            try:
+                return self._inner.classify(message)
+            except TriageUnavailable:
+                last = "TriageUnavailable"
+            except Exception as exc:
+                last = type(exc).__name__
+        raise TriageUnavailable(
+            f"classifier {self.name} unavailable after {self._attempts} attempts for "
+            f"{message.provider_message_id} (last error: {last})"
+        )
