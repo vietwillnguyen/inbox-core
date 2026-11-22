@@ -249,7 +249,8 @@ class GroundedAnswer:
     Refuses (hands off) when no passage scores at least ``min_score``, when
     the generator returns the refusal sentinel or nothing, and when retrieval
     or generation fails. Only passages above the threshold are given to the
-    generator, and those are the sources returned.
+    generator, and those are the sources returned, so ``limit`` should match
+    what the generator actually uses (1 for :class:`ExtractiveGenerator`).
     """
 
     def __init__(

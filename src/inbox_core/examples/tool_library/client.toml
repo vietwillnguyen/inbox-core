@@ -1,0 +1,75 @@
+# The Brambleford Tool Library is made up. Brambleford is not a real town and
+# nothing here describes a real organisation.
+
+[organisation]
+name = "Brambleford Tool Library"
+summary = "a made-up, volunteer-run library that lends tools to people in the fictional town of Brambleford"
+
+[triage]
+confidence_threshold = 0.6
+fallback_category = "other"
+
+[triage.languages]
+en = "English"
+es = "Spanish"
+
+[[triage.categories]]
+name = "faq"
+auto_answer = true
+escalates_to = "needs_admin"
+description = "a general question about the library: opening hours, location, which tools it has, how borrowing and returning work, workshops"
+
+[[triage.categories]]
+name = "membership"
+auto_answer = true
+escalates_to = "needs_admin"
+description = "the sender wants to become a member or asks how to join"
+
+[[triage.categories]]
+name = "reservation"
+description = "the sender wants to reserve, extend, change or cancel a loan of a specific tool"
+
+[[triage.categories]]
+name = "damage_report"
+escalates_to = "needs_executive"
+description = "a borrowed tool was damaged, lost or stolen, or someone was hurt using one"
+
+[[triage.categories]]
+name = "donation"
+escalates_to = "needs_executive"
+description = "an offer to donate tools, money or anything else to the library"
+
+[[triage.categories]]
+name = "press"
+escalates_to = "needs_executive"
+description = "a journalist, blogger, student researcher or other media request"
+
+[[triage.categories]]
+name = "complaint"
+escalates_to = "needs_executive"
+description = "a complaint about a volunteer, a member, or how the sender was treated"
+
+[[triage.categories]]
+name = "other"
+description = "a real person writing about something none of the above covers"
+
+[[triage.categories]]
+name = "automated"
+escalates_to = "skip"
+description = "not written by a person for this inbox: newsletters, receipts, delivery failures, out-of-office replies"
+
+[templates.membership]
+en = "Thank you for your interest in joining the Brambleford Tool Library. Membership is open to anyone aged 18 or over who lives or works in Brambleford. Please bring a photo ID and something showing your address to the front desk during opening hours; you can borrow on the same day."
+es = "Gracias por su interés en hacerse socio de la Brambleford Tool Library. Pueden hacerse socias todas las personas mayores de 18 años que vivan o trabajen en Brambleford. Traiga un documento de identidad con foto y algo que muestre su dirección al mostrador durante el horario de apertura; puede llevarse herramientas el mismo día."
+
+[delivery]
+mode = "draft"
+auto_languages = ["en"]
+daily_send_cap = 40
+per_sender_daily_cap = 2
+max_bot_replies_per_conversation = 3
+timezone = "Europe/London"
+
+[delivery.holding]
+en = "Thanks for writing to the Brambleford Tool Library. A volunteer will read your message and reply here."
+es = "Gracias por escribir a la Brambleford Tool Library. Una persona voluntaria leerá su mensaje y le responderá aquí."

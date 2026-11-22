@@ -1,0 +1,354 @@
+# Golden set for the made-up Brambleford Tool Library.
+# Every case was written for this file. No real person's words, names or
+# addresses appear in it. expected_tier is checked against derive_tier by the
+# loader, so a case that disagrees with the policy fails validation.
+
+# --- faq (auto_answer) -------------------------------------------------------
+
+[[cases]]
+id = "faq-en-hours"
+language = "en"
+text = "Hi, what are your opening hours? I want to come by this week."
+expected_category = "faq"
+expected_tier = "auto_answer"
+must_mention = ["open on Wednesdays 5pm to 8pm", "open on Saturdays 10am to 2pm"]
+
+[[cases]]
+id = "faq-en-location"
+language = "en"
+subject = "Where are you?"
+text = "Where exactly is the library? I could not find the entrance last time."
+expected_category = "faq"
+expected_tier = "auto_answer"
+must_mention = ["4 Mill Yard", "the green side door"]
+
+[[cases]]
+id = "faq-en-loan"
+language = "en"
+text = "How long can I keep a tool once I borrow it?"
+expected_category = "faq"
+expected_tier = "auto_answer"
+must_mention = ["seven days"]
+
+[[cases]]
+id = "faq-en-ladder"
+language = "en"
+text = "Can I borrow a ladder for a week to paint my hallway?"
+expected_category = "faq"
+expected_tier = "auto_answer"
+must_mention = ["ladders are lent for up to three days"]
+must_not_answer = ["that a ladder is reserved for the sender"]
+
+[[cases]]
+id = "faq-en-repair-cafe"
+language = "en"
+text = "My toaster stopped working. Is there somewhere I can learn to fix it?"
+expected_category = "faq"
+expected_tier = "auto_answer"
+must_mention = ["the repair café on the first Saturday of each month"]
+
+[[cases]]
+id = "faq-en-limit"
+language = "en"
+text = "How many tools can I take out at the same time?"
+expected_category = "faq"
+expected_tier = "auto_answer"
+must_mention = ["up to three tools"]
+
+[[cases]]
+id = "faq-es-hours"
+language = "es"
+text = "Hola, ¿qué horario tienen? ¿Abren los sábados?"
+expected_category = "faq"
+expected_tier = "auto_answer"
+must_mention = ["abre los sábados de 10 a 14", "abre los miércoles de 17 a 20"]
+
+[[cases]]
+id = "faq-es-location"
+language = "es"
+text = "¿Dónde se encuentra la biblioteca de herramientas? ¿Cuál es la dirección?"
+expected_category = "faq"
+expected_tier = "auto_answer"
+must_mention = ["4 Mill Yard"]
+
+[[cases]]
+id = "faq-es-renew"
+language = "es"
+text = "Tengo un taladro prestado. ¿Puedo renovar el préstamo una semana más?"
+expected_category = "faq"
+expected_tier = "auto_answer"
+must_mention = ["se puede renovar una vez si nadie lo ha reservado"]
+
+[[cases]]
+id = "faq-es-protection"
+language = "es"
+text = "¿Prestan también gafas de protección y guantes de seguridad?"
+expected_category = "faq"
+expected_tier = "auto_answer"
+must_mention = ["se prestan gafas y guantes junto con cualquier herramienta"]
+
+[[cases]]
+id = "faq-es-accessibility"
+language = "es"
+text = "Uso silla de ruedas. ¿Tiene acceso sin escalones?"
+expected_category = "faq"
+expected_tier = "auto_answer"
+must_mention = ["la puerta verde lateral tiene acceso sin escalones"]
+
+# --- membership (auto_answer, template) ---------------------------------------
+
+[[cases]]
+id = "membership-en-join"
+language = "en"
+text = "I just moved to Brambleford. How do I become a member?"
+expected_category = "membership"
+expected_tier = "auto_answer"
+must_mention = ["bring a photo ID and proof of address"]
+
+[[cases]]
+id = "membership-en-eligibility"
+language = "en"
+subject = "Joining"
+text = "I work in Brambleford but live outside it. Can I still sign up?"
+expected_category = "membership"
+expected_tier = "auto_answer"
+must_mention = ["anyone aged 18 or over who lives or works in Brambleford"]
+
+[[cases]]
+id = "membership-es-join"
+language = "es"
+text = "Quiero hacerme socia de la biblioteca. ¿Qué tengo que llevar?"
+expected_category = "membership"
+expected_tier = "auto_answer"
+must_mention = ["un documento de identidad con foto y algo que muestre la dirección"]
+
+[[cases]]
+id = "membership-es-age"
+language = "es"
+text = "Tengo 17 años, ¿me puedo inscribir?"
+expected_category = "membership"
+expected_tier = "auto_answer"
+must_mention = ["hay que ser mayor de 18 años"]
+
+# --- reservation (needs_admin) -----------------------------------------------
+
+[[cases]]
+id = "reservation-en-reserve"
+language = "en"
+text = "Could you put the pressure washer aside for me for next Saturday?"
+expected_category = "reservation"
+expected_tier = "needs_admin"
+
+[[cases]]
+id = "reservation-en-cancel"
+language = "en"
+text = "Please cancel my reservation for the carpet cleaner, my plans changed."
+expected_category = "reservation"
+expected_tier = "needs_admin"
+
+[[cases]]
+id = "reservation-es-reserve"
+language = "es"
+text = "¿Me pueden reservar la máquina de coser para el miércoles que viene?"
+expected_category = "reservation"
+expected_tier = "needs_admin"
+
+[[cases]]
+id = "reservation-es-change"
+language = "es"
+text = "Tenía reservada una lijadora para hoy, ¿puedo cambiarla al sábado?"
+expected_category = "reservation"
+expected_tier = "needs_admin"
+
+# --- damage_report (needs_executive) ------------------------------------------
+
+[[cases]]
+id = "damage-en-broken"
+language = "en"
+text = "The jigsaw I borrowed stopped working halfway through a cut and now it smells of burning."
+expected_category = "damage_report"
+expected_tier = "needs_executive"
+
+[[cases]]
+id = "damage-en-injury"
+language = "en"
+text = "The ladder slipped while I was on it and I hurt my wrist."
+expected_category = "damage_report"
+expected_tier = "needs_executive"
+
+[[cases]]
+id = "damage-es-lost"
+language = "es"
+text = "Me robaron la caja de herramientas del coche, con la llave inglesa de la biblioteca dentro."
+expected_category = "damage_report"
+expected_tier = "needs_executive"
+
+[[cases]]
+id = "damage-es-broken"
+language = "es"
+text = "Se me cayó la sierra y se ha roto el protector de la hoja."
+expected_category = "damage_report"
+expected_tier = "needs_executive"
+
+# --- donation (needs_executive) ----------------------------------------------
+
+[[cases]]
+id = "donation-en-tools"
+language = "en"
+text = "I'm clearing out my late father's garage and have a lot of good tools. Would you take them?"
+expected_category = "donation"
+expected_tier = "needs_executive"
+
+[[cases]]
+id = "donation-en-money"
+language = "en"
+text = "Our street party raised some money and we'd like to give it to the library. How can we send it?"
+expected_category = "donation"
+expected_tier = "needs_executive"
+expected_mentions_money = true
+
+[[cases]]
+id = "donation-es-tools"
+language = "es"
+text = "Tengo una cortadora de césped que ya no uso, ¿la quieren?"
+expected_category = "donation"
+expected_tier = "needs_executive"
+
+[[cases]]
+id = "donation-es-money"
+language = "es"
+text = "Me gustaría hacer un donativo económico mensual a la biblioteca."
+expected_category = "donation"
+expected_tier = "needs_executive"
+expected_mentions_money = true
+
+# --- press (needs_executive) -------------------------------------------------
+
+[[cases]]
+id = "press-en-paper"
+language = "en"
+text = "I write for a local news site and would love to interview one of your volunteers this month."
+expected_category = "press"
+expected_tier = "needs_executive"
+
+[[cases]]
+id = "press-en-student"
+language = "en"
+text = "I'm a university student researching sharing economies. Could I visit and take photos for my project?"
+expected_category = "press"
+expected_tier = "needs_executive"
+
+[[cases]]
+id = "press-es-radio"
+language = "es"
+text = "Trabajo en una radio comunitaria y queremos hacer un reportaje sobre la biblioteca."
+expected_category = "press"
+expected_tier = "needs_executive"
+
+# --- complaint (needs_executive) ---------------------------------------------
+
+[[cases]]
+id = "complaint-en-rude"
+language = "en"
+text = "The volunteer on the desk on Saturday was really rude to me when I returned the drill."
+expected_category = "complaint"
+expected_tier = "needs_executive"
+
+[[cases]]
+id = "complaint-es-treatment"
+language = "es"
+text = "Quiero quejarme del trato que recibí ayer en el mostrador, no me dejaron explicarme."
+expected_category = "complaint"
+expected_tier = "needs_executive"
+
+# --- other (needs_admin) -----------------------------------------------------
+
+[[cases]]
+id = "other-en-person"
+language = "en"
+text = "Can I please speak to someone who runs the library?"
+expected_category = "other"
+expected_tier = "needs_admin"
+expected_asks_for_human = true
+
+[[cases]]
+id = "other-en-misc"
+language = "en"
+text = "I found a set of keys near your door yesterday, did anyone report them missing?"
+expected_category = "other"
+expected_tier = "needs_admin"
+
+[[cases]]
+id = "other-es-person"
+language = "es"
+text = "¿Puedo hablar por teléfono con la persona responsable?"
+expected_category = "other"
+expected_tier = "needs_admin"
+expected_asks_for_human = true
+
+[[cases]]
+id = "other-es-misc"
+language = "es"
+text = "Organizo una fiesta de barrio, ¿podemos colgar un cartel en su tablón?"
+expected_category = "other"
+expected_tier = "needs_admin"
+
+# --- automated (skip) --------------------------------------------------------
+
+[[cases]]
+id = "automated-en-ooo"
+language = "en"
+subject = "Automatic reply: Your loan reminder"
+text = "I am out of the office until Monday with limited access to email."
+expected_category = "automated"
+expected_tier = "skip"
+
+[[cases]]
+id = "automated-en-bounce"
+language = "en"
+subject = "Delivery Status Notification (Failure)"
+text = "Your message could not be delivered to the recipient because the mailbox is full."
+expected_category = "automated"
+expected_tier = "skip"
+
+[[cases]]
+id = "automated-es-newsletter"
+language = "es"
+subject = "Boletín semanal de ofertas de jardinería"
+text = "Esta semana: descuentos en semillas y macetas. Para darse de baja, pulse aquí."
+expected_category = "automated"
+expected_tier = "skip"
+
+# --- rules that cut across categories ----------------------------------------
+
+[[cases]]
+id = "multi-en-faq-and-donation"
+language = "en"
+text = "What time do you open on Saturday? Also, I have a box of spare chisels I could give you."
+expected_category = "donation"
+expected_tier = "needs_executive"
+note = "Multi-topic: the most serious part decides."
+
+[[cases]]
+id = "money-en-fine"
+language = "en"
+text = "Do I have to pay a fine if I bring the hedge trimmer back two days late?"
+expected_category = "faq"
+expected_tier = "needs_executive"
+expected_mentions_money = true
+note = "An answerable question that mentions money still escalates: rule 1 comes first."
+
+[[cases]]
+id = "other-language-fr"
+language = "other"
+text = "Bonjour, quels sont vos horaires d'ouverture le samedi ?"
+expected_category = "faq"
+expected_tier = "needs_admin"
+note = "Answerable in substance, escalated on language alone."
+
+[[cases]]
+id = "other-language-de"
+language = "other"
+text = "Wie viele Werkzeuge darf ich gleichzeitig ausleihen?"
+expected_category = "faq"
+expected_tier = "needs_admin"

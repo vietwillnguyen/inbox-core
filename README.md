@@ -121,6 +121,16 @@ record = pipeline.process(incoming_message)
 
 A channel provides two things: a parser into `IncomingMessage`, and a `ReplySink` with `send_to_public` and `hold_for_review`.
 
+## A worked example
+
+[`examples/`](examples/README.md) describes the Brambleford Tool Library, a made-up organisation with a configuration, thirty knowledge entries and a forty-three message golden set in English and Spanish.
+
+```sh
+uv run python -m inbox_core.examples.demo --mode auto "What are your opening hours?"
+```
+
+It prints what would be sent or held, any escalation, and the audit record.
+
 ## Evaluating
 
 Three runners answer three questions, and none of them runs in CI, because they spend real model calls:
@@ -139,6 +149,7 @@ python -m inbox_core.evals groundedness --config client.toml --golden golden.tom
 python -m inbox_core.evals calibrate --config client.toml --golden golden.toml --answers answers.json
 ```
 
+No real-model run has been recorded yet; [`docs/evidence/`](docs/evidence/README.md) says how to make the first one.
 What does run in CI is what can be wrong for free: golden-set validation, including that every case's `expected_tier` is what `derive_tier` actually returns for it under the client's table, and the metric arithmetic.
 Summaries written to disk hold numbers, category names and case ids only.
 
