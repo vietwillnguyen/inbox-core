@@ -124,7 +124,7 @@ class FieldCipher:
             raw = _b64decode(payload)
         except (binascii.Error, ValueError, UnicodeEncodeError):
             raise DecryptionError(f"{where} is not valid base64") from None
-        if len(raw) <= NONCE_BYTES + 16:
+        if len(raw) < NONCE_BYTES + 16:
             raise DecryptionError(f"{where} is truncated")
         try:
             opened = aead.decrypt(raw[:NONCE_BYTES], raw[NONCE_BYTES:], context.encode("utf-8"))
