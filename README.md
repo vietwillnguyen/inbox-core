@@ -22,7 +22,8 @@ A message comes in from any channel and takes the same steps:
 Every message produces one audit record with ids and decisions and no content.
 
 It is a library, not a service.
-It has no channel code: a Gmail adapter, a Chatwoot connection or a web widget plugs in through two small protocols.
+The core has no channel code: a Gmail adapter, a Chatwoot connection or a web widget plugs in through two small protocols.
+One connection ships with it as an optional extra: [the Chatwoot connection](docs/chatwoot.md), which runs the core as a Chatwoot agent bot with a draft-review tab.
 
 ## What it guarantees, and what it does not
 
@@ -54,7 +55,7 @@ uv add "inbox-core[litellm,sqlalchemy,yaml] @ git+https://github.com/vietwillngu
 ```
 
 The core needs only `cryptography`.
-Extras: `litellm` (the LiteLLM classifier and generator), `jev` (the Jev classifier), `sqlalchemy` (the SQL store), `yaml` (YAML configuration files).
+Extras: `litellm` (the LiteLLM classifier and generator), `jev` (the Jev classifier), `sqlalchemy` (the SQL store), `yaml` (YAML configuration files), `chatwoot` (the Chatwoot connection, the only extra with a web framework).
 
 ## A configuration
 
@@ -121,6 +122,17 @@ record = pipeline.process(incoming_message)
 ```
 
 A channel provides two things: a parser into `IncomingMessage`, and a `ReplySink` with `send_to_public` and `hold_for_review`.
+A channel with a shared inbox can also pass `handoff_actions` (a note, labels, an assignee and opening the conversation), call `pipeline.person_replied(...)` when a person answers, and review held drafts through `pipeline.drafts`.
+
+## The Chatwoot connection
+
+```sh
+./deploy/chatwoot/stack.sh up       # Chatwoot CE v4.19.1, the service, a widget page; all on 127.0.0.1
+uv run pytest -m e2e tests/e2e      # the end-to-end suite against it
+```
+
+Webhooks are checked against Chatwoot's signature, held drafts are reviewed in a tab inside the conversation whose agent is verified with Chatwoot, Chatwoot is set to log without visitor text (proved by the suite), and a retention job deletes old transcripts.
+[`docs/chatwoot.md`](docs/chatwoot.md) has the details and the residual risks.
 
 ## A worked example
 
@@ -164,6 +176,8 @@ uv run pytest --cov
 ```
 
 The suite is deterministic, makes no network calls, and keeps coverage at 90 percent or more.
+The end-to-end suite against a local Chatwoot is opt-in (`-m e2e`); see [`docs/chatwoot.md`](docs/chatwoot.md).
+Generated code is regenerated with `uv run python scripts/generate.py`, and CI checks it is current.
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the rules, which matter because this repository is public.
 
 ## Licence and origin
