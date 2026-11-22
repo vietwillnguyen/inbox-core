@@ -1,0 +1,49 @@
+{
+  "comment": "Operations Chatwoot v4.19.1 serves but its published spec omits. Each is written from the source at the tag: config/routes.rb (resources :conversations, only: [..., :destroy]) and app/controllers/api/v1/accounts/conversations_controller.rb#destroy (authorize :destroy?, which app/policies/conversation_policy.rb allows for administrators only; head :ok).",
+  "paths": {
+    "/api/v1/accounts/{account_id}/conversations/{conversation_id}": {
+      "delete": {
+        "tags": [
+          "Conversations"
+        ],
+        "operationId": "delete-a-conversation",
+        "summary": "Delete a conversation (administrators only)",
+        "security": [
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Conversation not found"
+          }
+        }
+      }
+    }
+  },
+  "corrections": [
+    {
+      "comment": "app/models/conversation.rb at v4.19.1: enum status: { open: 0, resolved: 1, pending: 2, snoozed: 3 }. The spec omits snoozed, which would make a snoozed conversation unreadable.",
+      "path": [
+        "components",
+        "schemas",
+        "conversation",
+        "properties",
+        "status",
+        "enum"
+      ],
+      "value": [
+        "open",
+        "resolved",
+        "pending",
+        "snoozed"
+      ]
+    }
+  ]
+}

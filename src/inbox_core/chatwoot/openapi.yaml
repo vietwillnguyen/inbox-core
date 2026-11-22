@@ -1,0 +1,430 @@
+openapi: 3.0.3
+info:
+  title: inbox-core Chatwoot connection
+  version: 0.2.0
+  description: >-
+    The HTTP surface of the inbox-core Chatwoot service: the agent-bot webhook
+    Chatwoot calls, and the draft tab a Chatwoot Dashboard App frames inside a
+    conversation. This document is the source of truth; the models and the
+    router in inbox_core.chatwoot._service_api are generated from it by
+    scripts/generate.py. No response carries message content except a draft's
+    own text, and only to a signed-in agent who may see that conversation.
+servers:
+  - url: /
+tags:
+  - name: webhook
+  - name: draft-tab
+  - name: operations
+paths:
+  /healthz:
+    get:
+      operationId: health
+      tags: [operations]
+      summary: Liveness, the delivery mode and whether the core is ready
+      responses:
+        "200":
+          description: Up
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Health"}
+  /metrics:
+    get:
+      operationId: metrics
+      tags: [operations]
+      summary: Counters of accepted and rejected webhooks and tab actions, by reason
+      responses:
+        "200":
+          description: Counts only
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Metrics"}
+  /chatwoot/webhook/{path_token}:
+    post:
+      operationId: receive_webhook
+      tags: [webhook]
+      summary: An agent-bot event from Chatwoot
+      description: >-
+        Verified before anything else: the unguessable path token, then
+        X-Chatwoot-Signature, which Chatwoot v4.19.1 computes as
+        sha256=HMAC-SHA256(bot secret, "{X-Chatwoot-Timestamp}.{raw body}")
+        (lib/webhooks/trigger.rb), within a five-minute window, and the
+        X-Chatwoot-Delivery id is not reused. Anything unverified is answered
+        401 and counted. A verified event is answered 200 at once and acted on
+        in the background, after its message is re-fetched from Chatwoot's
+        API; the service never answers 429 or 500, because Chatwoot logs the
+        whole payload, visitor text included, when it retries those.
+      parameters:
+        - name: path_token
+          in: path
+          required: true
+          schema: {type: string, maxLength: 128}
+        - name: X-Chatwoot-Signature
+          in: header
+          required: false
+          schema: {type: string, maxLength: 128}
+        - name: X-Chatwoot-Timestamp
+          in: header
+          required: false
+          schema: {type: string, maxLength: 32}
+        - name: X-Chatwoot-Delivery
+          in: header
+          required: false
+          schema: {type: string, maxLength: 64}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WebhookEvent"}
+      responses:
+        "200":
+          description: Verified; accepted or deliberately ignored
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WebhookAck"}
+        "401":
+          description: Not verified
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+  /tab:
+    get:
+      operationId: draft_tab_page
+      tags: [draft-tab]
+      summary: The draft tab page, framed by Chatwoot's Dashboard App
+      description: >-
+        Served with a Content-Security-Policy whose frame-ancestors is the
+        Chatwoot origin only, so another site cannot frame it.
+      responses:
+        "200":
+          description: The page
+          content:
+            text/html:
+              schema: {type: string}
+  /tab/assets/{asset}:
+    get:
+      operationId: draft_tab_asset
+      tags: [draft-tab]
+      summary: The tab's script or stylesheet
+      parameters:
+        - name: asset
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [tab.js, tab.css]
+      responses:
+        "200":
+          description: The asset
+          content:
+            text/plain:
+              schema: {type: string}
+        "404":
+          description: No such asset
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+  /tab/session:
+    post:
+      operationId: create_tab_session
+      tags: [draft-tab]
+      summary: Sign an agent in to the tab with their own Chatwoot access token
+      description: >-
+        The Chatwoot identity posted to the frame is unsigned and is never
+        trusted. Instead the agent pastes their personal Chatwoot access token;
+        the service asks Chatwoot who it belongs to (GET /api/v1/profile) and
+        which inboxes they may see (GET /api/v1/accounts/{id}/inboxes), keeps
+        neither the token nor any of the response beyond the agent's id and
+        those inbox ids, and returns a short-lived session token signed by the
+        service. Requests must come from the tab's own origin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SessionRequest"}
+      responses:
+        "200":
+          description: Signed in
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Session"}
+        "401":
+          description: Chatwoot did not accept the token
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "403":
+          description: The agent is not a member of this account, or a cross-origin request
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "429":
+          description: Too many sign-in attempts from this address
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "502":
+          description: Chatwoot could not be reached
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+  /tab/conversations/{conversation_id}/drafts:
+    get:
+      operationId: list_drafts
+      tags: [draft-tab]
+      summary: The conversation's held drafts, with the decision behind each
+      security:
+        - tabSession: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Drafts, each with a single-purpose action token
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DraftList"}
+        "401":
+          description: No valid session
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "403":
+          description: The agent may not see this conversation
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+  /tab/conversations/{conversation_id}/drafts/{draft_id}/send:
+    post:
+      operationId: send_draft
+      tags: [draft-tab]
+      summary: Send a held draft, as written or edited, as the signed-in agent's decision
+      security:
+        - tabSession: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/DraftId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SendRequest"}
+      responses:
+        "200":
+          description: Sent
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ReviewOutcome"}
+        "400":
+          description: Empty text
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "401":
+          description: No valid session or action token
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "403":
+          description: Not this agent's conversation, the action token is for another draft, or a cross-origin request
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "404":
+          description: No such draft in this conversation
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "409":
+          description: Already sent, discarded, expired or being sent; or delivery is off
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "502":
+          description: Chatwoot refused the message; the draft is marked failed and not retried
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+  /tab/conversations/{conversation_id}/drafts/{draft_id}/discard:
+    post:
+      operationId: discard_draft
+      tags: [draft-tab]
+      summary: Discard a held draft
+      security:
+        - tabSession: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - $ref: "#/components/parameters/DraftId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DiscardRequest"}
+      responses:
+        "200":
+          description: Discarded
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ReviewOutcome"}
+        "401":
+          description: No valid session or action token
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "403":
+          description: Not this agent's conversation, or the action token is for another draft
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "404":
+          description: No such draft in this conversation
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "409":
+          description: Already sent, discarded or expired
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Problem"}
+components:
+  securitySchemes:
+    tabSession:
+      type: http
+      scheme: bearer
+      description: A session token from POST /tab/session, sent as Authorization Bearer.
+  parameters:
+    ConversationId:
+      name: conversation_id
+      in: path
+      required: true
+      description: The Chatwoot conversation's display id
+      schema: {type: integer, minimum: 1}
+    DraftId:
+      name: draft_id
+      in: path
+      required: true
+      schema: {type: integer, minimum: 1}
+  schemas:
+    Problem:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: A fixed phrase
+    Health:
+      type: object
+      required: [status, mode]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        mode:
+          type: string
+          enum: ["off", draft, auto]
+    Metrics:
+      type: object
+      required: [webhooks_accepted, webhooks_ignored, webhooks_rejected, tab_rejected, processed]
+      properties:
+        webhooks_accepted: {type: integer}
+        webhooks_ignored:
+          type: object
+          additionalProperties: {type: integer}
+        webhooks_rejected:
+          type: object
+          additionalProperties: {type: integer}
+        tab_rejected:
+          type: object
+          additionalProperties: {type: integer}
+        processed:
+          type: object
+          additionalProperties: {type: integer}
+    WebhookEvent:
+      type: object
+      description: Chatwoot's agent-bot payload. Its fields are read only after verification.
+      additionalProperties: true
+    WebhookAck:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [accepted, ignored, duplicate]
+    SessionRequest:
+      type: object
+      required: [chatwoot_token]
+      properties:
+        chatwoot_token:
+          type: string
+          minLength: 8
+          maxLength: 256
+          description: The agent's personal access token from Chatwoot's profile settings. Never stored.
+    Session:
+      type: object
+      required: [session_token, agent_id, expires_at]
+      properties:
+        session_token: {type: string}
+        agent_id: {type: integer}
+        agent_name: {type: string}
+        expires_at:
+          type: string
+          format: date-time
+    Source:
+      type: object
+      required: [id, title]
+      properties:
+        id: {type: string}
+        title: {type: string}
+    Draft:
+      type: object
+      required: [id, kind, language, text, sources, held_because, created_at, category, tier, classifier, action_token]
+      properties:
+        id: {type: integer}
+        kind: {type: string}
+        language: {type: string}
+        text: {type: string}
+        sources:
+          type: array
+          items: {$ref: "#/components/schemas/Source"}
+        held_because: {type: string}
+        created_at: {type: string, format: date-time}
+        category: {type: string}
+        tier: {type: string}
+        confidence:
+          type: number
+          nullable: true
+        classifier: {type: string}
+        action_token:
+          type: string
+          description: Signed, bound to this session, this conversation and this draft; short-lived.
+    DraftList:
+      type: object
+      required: [conversation_id, mode, drafts]
+      properties:
+        conversation_id: {type: integer}
+        mode:
+          type: string
+          enum: ["off", draft, auto]
+        drafts:
+          type: array
+          items: {$ref: "#/components/schemas/Draft"}
+    SendRequest:
+      type: object
+      required: [text, action_token]
+      properties:
+        text:
+          type: string
+          maxLength: 4000
+        action_token: {type: string, maxLength: 1024}
+    DiscardRequest:
+      type: object
+      required: [action_token]
+      properties:
+        action_token: {type: string, maxLength: 1024}
+    ReviewOutcome:
+      type: object
+      required: [draft_id, outcome, reviewer]
+      properties:
+        draft_id: {type: integer}
+        outcome:
+          type: string
+          enum: [sent_as_written, sent_edited, discarded]
+        reviewer: {type: string}

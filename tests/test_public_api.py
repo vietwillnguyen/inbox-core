@@ -45,9 +45,15 @@ TOP_LEVEL = {
 }
 
 
+GENERATED = ("inbox_core.chatwoot._chatwoot_api", "inbox_core.chatwoot._service_api")
+"""Packages written by scripts/generate.py, held to their generator's standard, not this one."""
+
+
 def modules() -> list[Any]:
     found = [inbox_core]
     for info in pkgutil.walk_packages(inbox_core.__path__, "inbox_core."):
+        if info.name.startswith(GENERATED):
+            continue
         found.append(importlib.import_module(info.name))
     return found
 

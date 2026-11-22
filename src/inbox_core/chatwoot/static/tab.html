@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en" data-chatwoot-origin="{{CHATWOOT_ORIGIN}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>inbox-core drafts</title>
+<link rel="stylesheet" href="/tab/assets/tab.css">
+<script src="/tab/assets/tab.js" defer></script>
+</head>
+<body>
+<main class="tab">
+  <header class="bar">
+    <div class="bar__title">
+      <span class="mark" aria-hidden="true"></span>
+      <h1>Drafts from inbox-core</h1>
+    </div>
+    <div class="bar__who" id="who" hidden>
+      <span id="who-name"></span>
+      <button type="button" class="link" id="sign-out">Sign out</button>
+    </div>
+  </header>
+
+  <section class="card" id="outside" hidden>
+    <h2>Open this from a conversation</h2>
+    <p class="muted">This page works inside Chatwoot, as a tab on a conversation.</p>
+  </section>
+
+  <section class="card" id="sign-in" hidden>
+    <h2>Sign in to review drafts</h2>
+    <p class="muted">Paste your own Chatwoot access token. inbox-core asks Chatwoot who it belongs to, then forgets it.
+      You will stay signed in in this browser tab for a short while.</p>
+    <form id="sign-in-form" class="stack" autocomplete="off">
+      <label for="token">Access token</label>
+      <input id="token" name="token" type="password" spellcheck="false" autocomplete="off" required minlength="8" maxlength="256">
+      <p class="hint">In Chatwoot: your avatar, then Profile settings, then Access token.</p>
+      <div class="row"><button type="submit" class="primary" id="sign-in-button">Sign in</button></div>
+    </form>
+  </section>
+
+  <section id="drafts" class="stack" hidden></section>
+
+  <section class="card empty" id="empty" hidden>
+    <h2>Nothing waiting</h2>
+    <p class="muted">inbox-core has no draft held for review in this conversation.</p>
+  </section>
+
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+
+  <template id="draft-template">
+    <article class="card draft">
+      <div class="draft__head">
+        <span class="pill pill--kind" data-field="kind"></span>
+        <span class="draft__when muted" data-field="when"></span>
+      </div>
+      <dl class="facts">
+        <div><dt>Category</dt><dd data-field="category"></dd></div>
+        <div><dt>Tier</dt><dd data-field="tier"></dd></div>
+        <div><dt>Confidence</dt><dd data-field="confidence"></dd></div>
+        <div><dt>Held because</dt><dd data-field="held"></dd></div>
+      </dl>
+      <div class="sources" data-field="sources-wrap">
+        <h3>Sources</h3>
+        <ul data-field="sources"></ul>
+      </div>
+      <label class="draft__label">Reply to send</label>
+      <textarea rows="7" maxlength="4000" spellcheck="true"></textarea>
+      <div class="row">
+        <button type="button" class="primary" data-action="send">Send to visitor</button>
+        <button type="button" data-action="discard">Discard</button>
+        <span class="edited muted" data-field="edited" hidden>Edited</span>
+      </div>
+    </article>
+  </template>
+</main>
+</body>
+</html>

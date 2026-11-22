@@ -221,11 +221,26 @@ class TestTheOnlyPathToThePublic:
         # a held draft. It reaches the public only through
         # Delivery.release_approved (pinned below), never through a sink.
         others = {name for name in shaped if not name.endswith(".send_to_public")}
-        assert others == {"inbox_core.review.DraftReview.send"}
+        assert others == {
+            "inbox_core.review.DraftReview.send",
+            "inbox_core.chatwoot.api.ChatwootApi.send_message",
+            "inbox_core.chatwoot._service_api.routes.ServiceApi.send_draft",
+            "inbox_core.chatwoot.service.ChatwootService.send_draft",
+        }
+        #
+        # The Chatwoot connection adds three, each pinned by a test below or in
+        # tests/chatwoot/test_send_paths.py: its sink's transport
+        # (ChatwootApi.send_message, called only by its send_to_public) and
+        # the draft tab's send operation, generated and implemented, which
+        # reaches the public only through DraftReview.send.
         assert shaped == {
             "inbox_core.delivery.ReplySink.send_to_public",
             "inbox_core.review.DraftReview.send",
             "inbox_core.testing.fakes.RecordingSink.send_to_public",
+            "inbox_core.chatwoot.sink.ChatwootReplySink.send_to_public",
+            "inbox_core.chatwoot.api.ChatwootApi.send_message",
+            "inbox_core.chatwoot._service_api.routes.ServiceApi.send_draft",
+            "inbox_core.chatwoot.service.ChatwootService.send_draft",
         }
 
     def test_send_to_public_is_called_from_exactly_one_place(self) -> None:

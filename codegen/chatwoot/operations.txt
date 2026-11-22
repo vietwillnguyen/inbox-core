@@ -1,0 +1,13 @@
+# Chatwoot operations inbox-core calls, by operationId in Chatwoot's spec at the pinned tag.
+# Keep this list short: only what the connection needs.
+create-a-new-message-in-a-conversation  # send to the visitor, and private notes
+toggle-status-of-a-conversation         # open a conversation for a person
+assign-a-conversation                   # assign it
+conversation-add-labels                 # label it
+get-details-of-a-conversation           # which inbox and account a conversation is in
+list-all-messages                       # re-fetch a webhook's message before acting on it
+fetchProfile                            # who an agent's token belongs to (draft tab sign-in)
+listAllInboxes                          # which inboxes that agent may see
+conversationList                        # retention: find old conversations
+contactConversations                    # retention: does a contact have any left
+contactDelete                           # retention: delete a contact with none left
