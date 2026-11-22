@@ -1,0 +1,81 @@
+# A configuration equivalent to the origin engine's hard-coded category table.
+# Descriptions are written for this file; only the category names, tiers,
+# languages and threshold come from the origin.
+
+[organisation]
+name = "Origin Equivalent"
+summary = "a volunteer-run organisation used to prove the configurable policy matches the original"
+
+[triage]
+confidence_threshold = 0.6
+fallback_category = "human_other"
+
+[triage.languages]
+en = "English"
+vi = "Vietnamese"
+
+[[triage.categories]]
+name = "signup"
+auto_answer = true
+escalates_to = "needs_admin"
+description = "the sender wants to volunteer and is asking how to join"
+
+[[triage.categories]]
+name = "faq"
+auto_answer = true
+escalates_to = "needs_admin"
+description = "a general question about the organisation from someone not reporting a problem"
+
+[[triage.categories]]
+name = "volunteer_ops"
+auto_answer = false
+escalates_to = "needs_admin"
+description = "an existing volunteer writing about logistics or their own shift"
+
+[[triage.categories]]
+name = "sponsorship"
+auto_answer = false
+escalates_to = "needs_executive"
+description = "an offer of, or a request about, sponsorship or funding"
+
+[[triage.categories]]
+name = "donation"
+auto_answer = false
+escalates_to = "needs_executive"
+description = "an offer of, or a question about, donating money or goods"
+
+[[triage.categories]]
+name = "partnership"
+auto_answer = false
+escalates_to = "needs_executive"
+description = "an organisation proposing to work together"
+
+[[triage.categories]]
+name = "press"
+auto_answer = false
+escalates_to = "needs_executive"
+description = "a journalist, researcher or media request"
+
+[[triage.categories]]
+name = "safeguarding_legal"
+auto_answer = false
+escalates_to = "needs_executive"
+description = "anything about a person's safety or welfare, a complaint about a person, or a legal matter"
+
+[[triage.categories]]
+name = "acceptance"
+auto_answer = false
+escalates_to = "needs_executive"
+description = "the sender asks whether an application was accepted or rejected"
+
+[[triage.categories]]
+name = "human_other"
+auto_answer = false
+escalates_to = "needs_admin"
+description = "a real person writing about something none of the above covers"
+
+[[triage.categories]]
+name = "automated"
+auto_answer = false
+escalates_to = "skip"
+description = "not written by a person: newsletters, receipts, bounces, out-of-office replies"
