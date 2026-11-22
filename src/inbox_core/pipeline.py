@@ -42,6 +42,14 @@ from inbox_core.config import ClientConfig
 from inbox_core.delivery import Delivery, DeliveryMode, DeliveryResult, ReplySink, Route, SendCaps
 from inbox_core.guards import Guard, default_guards, run_guards
 from inbox_core.handlers import HandlerRegistry, HandlerRequest
+from inbox_core.handoff import (
+    HandOffActions,
+    HandOffPurpose,
+    HandOffRequest,
+    NoHandOffActions,
+    handoff_labels,
+    handoff_note,
+)
 from inbox_core.messages import IncomingMessage, OutboundReply
 from inbox_core.store import (
     Conversation,
@@ -119,6 +127,8 @@ class AuditRecord:
 
     ``at`` is naive UTC in ISO format. ``delivery`` is ``none``, ``held``,
     ``sent``, ``failed`` or empty when nothing was attempted.
+    ``handoff_failures`` names the best-effort hand-off steps that failed
+    (see :mod:`inbox_core.handoff`).
     """
 
     at: str
@@ -139,12 +149,14 @@ class AuditRecord:
     sources: tuple[str, ...]
     guard: str
     tags: tuple[str, ...]
+    handoff_failures: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         """A JSON-ready dictionary."""
         data = asdict(self)
         data["sources"] = list(self.sources)
         data["tags"] = list(self.tags)
+        data["handoff_failures"] = list(self.handoff_failures)
         return data
 
 
@@ -224,6 +236,7 @@ class _Draft:
     sources: tuple[str, ...] = ()
     guard: str = ""
     tags: tuple[str, ...] = ()
+    handoff_failures: list[str] = field(default_factory=list)
 
     def take(self, decision: TriageDecision) -> None:
         self.category = decision.category
@@ -251,6 +264,7 @@ class _Draft:
             sources=self.sources,
             guard=self.guard,
             tags=self.tags,
+            handoff_failures=tuple(self.handoff_failures),
         )
 
 
@@ -262,7 +276,9 @@ class Pipeline:
     :func:`inbox_core.guards.default_guards`; pass your own list (usually the
     defaults plus channel guards) to change it. ``mode_override`` replaces the
     configured mode, for a runtime switch read with
-    :func:`inbox_core.delivery.parse_mode`.
+    :func:`inbox_core.delivery.parse_mode`. ``handoff_actions`` is the
+    channel's shared-inbox side of a hand-off (see :mod:`inbox_core.handoff`);
+    without it nothing beyond the holding message and the notifier happens.
     """
 
     def __init__(
@@ -278,6 +294,7 @@ class Pipeline:
         caps: SendCaps | None = None,
         guards: Iterable[Guard] | None = None,
         mode_override: DeliveryMode | None = None,
+        handoff_actions: HandOffActions | None = None,
         classifier_attempts: int = 3,
         backoff: tuple[float, ...] = (0.5, 2.0),
         sleep: Callable[[float], object] = time.sleep,
@@ -295,6 +312,7 @@ class Pipeline:
         self._notifier = notifier
         self._audit = audit
         self._guards = tuple(guards) if guards is not None else default_guards()
+        self._actions = handoff_actions if handoff_actions is not None else NoHandOffActions()
         self._clock = clock
         self._mode = mode_override if mode_override is not None else policy.mode
         self._delivery = Delivery(
@@ -425,7 +443,11 @@ class Pipeline:
         if self._mode is DeliveryMode.OFF:
             return "delivery is off"
         cap = self._config.delivery.max_bot_replies_per_conversation
-        if conversation.bot_reply_count >= cap:
+        # A retry of this same message resumes its own earlier reply (which
+        # _deliver_once reports rather than repeats), so that reply must not
+        # count against the cap it already passed.
+        resuming = any(m.kind != HOLDING_KIND for m in self._store.outbound_for(row.id))
+        if conversation.bot_reply_count >= cap and not resuming:
             return f"bot reply cap reached ({cap} per conversation)"
 
         handler = self._handlers.for_category(decision.category)
@@ -468,6 +490,8 @@ class Pipeline:
 
         draft.delivery = delivered.action
         draft.held_because = delivered.held_because
+        if delivered.action == "held":
+            self._bring_in_a_person("review", message, decision.tier, delivered.held_because, draft)
         draft.decision = "answered" if delivered.action == "sent" else "answer_held"
         self._store.mark_handled(row.id, draft.decision)
         return None
@@ -562,6 +586,7 @@ class Pipeline:
                 )
 
         tier: Tier = decision.tier
+        self._bring_in_a_person("hand_off", message, tier, draft.reason, draft)
         try:
             self._notifier.notify(self._escalation(message, draft, tier))
         except Exception as exc:
@@ -569,6 +594,59 @@ class Pipeline:
         self._store.pause(conversation.id, f"{tier}: {draft.reason}"[:256])
         self._store.mark_handled(row.id, "handed_off")
         draft.decision = "handed_off"
+
+    def _bring_in_a_person(
+        self,
+        purpose: HandOffPurpose,
+        message: IncomingMessage,
+        tier: str,
+        reason: str,
+        draft: _Draft,
+    ) -> None:
+        """Run the channel's hand-off steps in order; only failing to open is fatal."""
+        category = draft.category or self._config.triage.fallback_category
+        request = HandOffRequest(
+            purpose=purpose,
+            channel=message.channel,
+            thread_key=message.thread_key,
+            message_id=message.provider_message_id,
+            conversation_id=draft.conversation_id,
+            category=category,
+            tier=tier or "needs_admin",
+            reason=reason,
+            labels=handoff_labels(
+                purpose, category, classifier_unavailable=draft.classifier == UNAVAILABLE
+            ),
+            note=handoff_note(
+                purpose,
+                category=category,
+                tier=tier or "needs_admin",
+                reason=reason,
+                sources=draft.sources,
+            ),
+        )
+        actions = self._actions
+        for name, step in (
+            ("add_internal_note", actions.add_internal_note),
+            ("add_labels", actions.add_labels),
+            ("assign", actions.assign),
+        ):
+            try:
+                step(request)
+            except Exception as exc:
+                draft.handoff_failures.append(name)
+                logger.warning(
+                    "hand-off step %s failed for %s: %s",
+                    name,
+                    message.provider_message_id,
+                    type(exc).__name__,
+                )
+        try:
+            actions.open_for_person(request)
+        except Exception as exc:
+            raise _Incomplete(
+                f"could not open the conversation for a person ({type(exc).__name__})"
+            ) from None
 
     def _escalation(self, message: IncomingMessage, draft: _Draft, tier: str) -> Escalation:
         return Escalation(

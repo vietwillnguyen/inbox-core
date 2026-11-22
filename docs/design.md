@@ -216,6 +216,18 @@ It fails closed in three specific ways:
 
 A failed holding message does not stop the hand-off; a holding message or answer whose earlier attempt did not finish is never repeated.
 
+### Hand-off side effects
+
+A shared inbox such as Chatwoot can do four things when a person must act: add an internal note only staff see, label the conversation, assign it, and open it in a person's queue.
+`inbox_core.handoff.HandOffActions` is that protocol, passed to the pipeline as `handoff_actions`.
+The pipeline calls it for a hand-off (purpose `hand_off`) and for a drafted reply held for review (purpose `review`), in a fixed order: holding message, note, labels, assign, open, notifier, pause.
+
+- The note, the labels and the assignment are best effort: a failure is logged by exception type and named in the audit record's `handoff_failures`, and the hand-off continues.
+- Opening is what puts the conversation in front of a person, so failing to open fails closed: the message is `incomplete` and retried, and the retry neither repeats the holding message nor counts its own earlier reply against the per-conversation cap.
+- The note and labels are composed by the core from fixed phrases, category and tier names, source ids and numbers (`handoff_note`, `handoff_labels`), so posting them cannot copy what the visitor wrote.
+- Holding a draft for review does not pause the conversation and does not call the notifier; it is not a hand-off.
+  The draft counts as the conversation's bot reply, so with the default cap of one the next message is handed off.
+
 The audit record holds the channel, thread and message ids, the conversation id, category, tier, confidence, classifier, decision, reason, handler, mode, delivery outcome, the reason a reply was held, source ids, the guard and the handler's tags.
 It holds no text, subject or address, and the reasons are built from fixed phrases, category names and numbers.
 
