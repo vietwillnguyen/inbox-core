@@ -23,12 +23,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal, cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from inbox_core.delivery import DeliveryMode
 
 __all__ = [
     "ESCALATION_TIERS",
     "CategoryRule",
     "ClientConfig",
     "ConfigError",
+    "DeliveryPolicy",
     "EscalationTier",
     "Organisation",
     "TriagePolicy",
@@ -267,6 +271,60 @@ def _template_problems(
     return problems
 
 
+def _positive_int_problem(name: str, value: object) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return f"{name} must be a whole number of at least 1"
+    return None
+
+
+@dataclass(frozen=True)
+class DeliveryPolicy:
+    """How replies are delivered, and the bounds on them.
+
+    The defaults are the safe ones: ``off``, no language signed off for
+    automatic sending, one bot reply per conversation. ``holding`` is the
+    message sent (or held) when a conversation is handed to a person, by
+    language; :meth:`ClientConfig.holding_text` falls back to the default
+    language. ``timezone`` is the organisation's, for when a day starts.
+    """
+
+    mode: DeliveryMode = DeliveryMode.OFF
+    auto_languages: frozenset[str] = frozenset()
+    daily_send_cap: int = 30
+    per_sender_daily_cap: int = 2
+    max_bot_replies_per_conversation: int = 1
+    timezone: str = "UTC"
+    holding: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "holding", MappingProxyType(dict(self.holding)))
+        problems = []
+        mode: object = self.mode
+        auto_languages: object = self.auto_languages
+        if not isinstance(mode, DeliveryMode):
+            problems.append("delivery.mode must be one of off, draft, auto")
+        if not isinstance(auto_languages, frozenset):
+            problems.append("delivery.auto_languages must be a set of language codes")
+        for name in ("daily_send_cap", "per_sender_daily_cap", "max_bot_replies_per_conversation"):
+            problem = _positive_int_problem(f"delivery.{name}", getattr(self, name))
+            if problem:
+                problems.append(problem)
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError, TypeError):
+            problems.append(f"delivery.timezone {self.timezone!r} is not a known IANA timezone")
+        for code, text in self.holding.items():
+            if not isinstance(text, str) or not text.strip():
+                problems.append(f"delivery.holding has an empty text for {code!r}")
+        if problems:
+            raise ConfigError(problems)
+
+    @property
+    def zone(self) -> ZoneInfo:
+        """The organisation's timezone."""
+        return ZoneInfo(self.timezone)
+
+
 @dataclass(frozen=True)
 class ClientConfig:
     """Everything a client configures about the core, as one validated object.
@@ -279,6 +337,7 @@ class ClientConfig:
     organisation: Organisation
     triage: TriagePolicy
     templates: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    delivery: DeliveryPolicy = field(default_factory=DeliveryPolicy)
 
     def __post_init__(self) -> None:
         frozen = {
@@ -287,8 +346,18 @@ class ClientConfig:
         }
         object.__setattr__(self, "templates", MappingProxyType(frozen))
         problems = _template_problems(self.templates, self.triage)
+        languages = self.triage.languages
+        for code in sorted(self.delivery.auto_languages - set(languages)):
+            problems.append(f"delivery.auto_languages names unconfigured language {code!r}")
+        for code in sorted(set(self.delivery.holding) - set(languages)):
+            problems.append(f"delivery.holding has text for unconfigured language {code!r}")
         if problems:
             raise ConfigError(problems)
+
+    def holding_text(self, language: str) -> str | None:
+        """The holding message for ``language``, else the default language's, else None."""
+        holding = self.delivery.holding
+        return holding.get(language) or holding.get(self.triage.default_language)
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any], source: str = "configuration") -> ClientConfig:
@@ -350,20 +419,53 @@ class _Reader:
         return cast("Mapping[str, Any]", data)
 
     def client(self, data: Mapping[str, Any]) -> ClientConfig | None:
-        root = self.table(data, "the configuration", ("organisation", "triage", "templates"))
+        sections = ("organisation", "triage", "templates", "delivery")
+        root = self.table(data, "the configuration", sections)
         if root is None:
             return None
         organisation = self.organisation(root.get("organisation"))
         triage = self.triage(root.get("triage"))
+        delivery = self.delivery(root.get("delivery", {}))
         templates = root.get("templates", {})
         if not isinstance(templates, Mapping):
             self.problems.append("templates must be a table of template tables")
             return None
-        if organisation is None or triage is None:
+        if organisation is None or triage is None or delivery is None:
             return None
         return self._build(
-            lambda: ClientConfig(organisation=organisation, triage=triage, templates=templates)
+            lambda: ClientConfig(
+                organisation=organisation, triage=triage, templates=templates, delivery=delivery
+            )
         )
+
+    def delivery(self, data: object) -> DeliveryPolicy | None:
+        allowed = (
+            "mode",
+            "auto_languages",
+            "daily_send_cap",
+            "per_sender_daily_cap",
+            "max_bot_replies_per_conversation",
+            "timezone",
+            "holding",
+        )
+        table = self.table(data, "delivery", allowed)
+        if table is None:
+            return None
+        values: dict[str, Any] = {key: value for key, value in table.items() if key in allowed}
+        mode = values.get("mode", "off")
+        if mode not in {m.value for m in DeliveryMode}:
+            self.problems.append("delivery.mode must be one of off, draft, auto")
+            return None
+        values["mode"] = DeliveryMode(mode)
+        languages = values.get("auto_languages", [])
+        if not isinstance(languages, list) or not all(isinstance(c, str) for c in languages):
+            self.problems.append("delivery.auto_languages must be a list of language codes")
+            return None
+        values["auto_languages"] = frozenset(languages)
+        if not isinstance(values.get("holding", {}), Mapping):
+            self.problems.append("delivery.holding must be a table of language = text")
+            return None
+        return self._build(lambda: DeliveryPolicy(**values))
 
     def organisation(self, data: object) -> Organisation | None:
         table = self.table(data, "organisation", ("name", "summary"))

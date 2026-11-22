@@ -141,3 +141,27 @@ Neither of these is built; this is how they would plug in.
 - **A vertical handler** (such as drafting a quote from stock) is the same: a `Handler` registered for its category, holding its own dependencies, returning a reply, usually with `requires_approval=True`.
 
 New context a handler might need later, such as the conversation so far, is added to `HandlerRequest` as a field with a default, so existing handlers keep working.
+
+## Delivery
+
+`choose_route(mode, language, auto_languages, requires_approval=...)` is a pure table:
+
+| Mode | Route |
+|---|---|
+| `off` | nowhere: nothing is sent and nothing is drafted |
+| `draft` | held for review |
+| `auto` | sent, unless the language is not signed off for automatic sending or the handler asked for approval, in which case held |
+
+`Delivery.deliver` then applies the caps to a `send` route; a reached cap holds the reply rather than dropping it.
+The caps are a `SendCaps` protocol: a daily cap and a per-sender cap counted in conversations, over the organisation's local day.
+`InMemorySendCaps` counts per process; a deployment that restarts or runs more than one process counts from its store.
+
+A channel implements `ReplySink` with two methods, `send_to_public` and `hold_for_review`.
+The guarantee that there is exactly one code path to the public is enforced by `tests/test_delivery.py` in three ways:
+
+- every combination of mode, language, approval and cap state is driven through `Delivery` against a recording sink, and `send_to_public` is called only when all four allow it; `off` reaches neither method and `draft` never reaches `send_to_public`;
+- every public function and method in every module of the package is walked, and the only send-shaped name is `ReplySink.send_to_public`;
+- the package source is parsed, and the only call of `send_to_public` anywhere is in `Delivery._send`, which `deliver` reaches only after the route is `send`.
+
+The delivery section of the configuration defaults to the safe settings: mode `off`, no language signed off for automatic sending, a daily cap of 30, two conversations per sender per day, one bot reply per conversation, and UTC.
+An unknown mode in a configuration file is an error; `parse_mode`, for runtime settings such as an environment variable, reads anything unknown as `off`.
