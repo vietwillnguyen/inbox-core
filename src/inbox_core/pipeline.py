@@ -51,6 +51,7 @@ from inbox_core.handoff import (
     handoff_note,
 )
 from inbox_core.messages import IncomingMessage, OutboundReply
+from inbox_core.review import DraftReview
 from inbox_core.store import (
     Conversation,
     ConversationStore,
@@ -338,6 +339,11 @@ class Pipeline:
             ),
         )
 
+    @property
+    def drafts(self) -> DraftReview:
+        """Held drafts in this pipeline's store, released through this pipeline's delivery."""
+        return DraftReview(self._store, self._delivery)
+
     def process(self, message: IncomingMessage) -> AuditRecord:
         """Take one message through every step. Always returns its audit record."""
         draft = _Draft(message, self._mode.value)
@@ -545,7 +551,7 @@ class Pipeline:
                 raise _Unfinished
             if last.action == "sent":
                 return DeliveryResult(Route.SEND, "sent", last.provider_ref, "")
-            if last.action == "held":
+            if last.action in ("held", "reviewing", "discarded", "expired"):
                 return DeliveryResult(
                     Route.HOLD, "held", last.provider_ref, "held on an earlier attempt"
                 )
@@ -567,7 +573,10 @@ class Pipeline:
             self._store.finish_outbound(outbound.id, action="failed", provider_ref=None)
             raise
         self._store.finish_outbound(
-            outbound.id, action=result.action, provider_ref=result.provider_ref
+            outbound.id,
+            action=result.action,
+            provider_ref=result.provider_ref,
+            held_because=result.held_because,
         )
         return result
 

@@ -14,8 +14,10 @@ caps, where may this reply go?
 
 :class:`ReplySink` is what a channel implements. Its ``send_to_public`` is
 called from exactly one place in this package, ``Delivery._send``, which is
-reached only from :meth:`Delivery.deliver` after the route has been decided as
-``send``. A test walks the package source to keep it that way.
+reached from two methods only: :meth:`Delivery.deliver`, after the route has
+been decided as ``send``, and :meth:`Delivery.release_approved`, when a person
+approved a held draft and delivery is not ``off``. A test walks the package
+source to keep it that way.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ __all__ = [
     "DeliveryMode",
     "DeliveryResult",
     "InMemorySendCaps",
+    "ReleaseRefusedError",
     "ReplySink",
     "Route",
     "SendCaps",
@@ -246,6 +249,10 @@ def choose_route(
     return Route.SEND, ""
 
 
+class ReleaseRefusedError(RuntimeError):
+    """A person's approval cannot be delivered, because delivery is ``off``."""
+
+
 @dataclass
 class Delivery:
     """Delivers replies through a sink under a mode, language gates and caps.
@@ -278,6 +285,21 @@ class Delivery:
                 route, why = Route.HOLD, f"{decision.cap} cap reached"
         if route is Route.HOLD:
             return DeliveryResult(Route.HOLD, "held", self.sink.hold_for_review(reply), why)
+        ref = self._send(reply)
+        self.caps.record_send(sender_key, reply.thread_key)
+        return DeliveryResult(Route.SEND, "sent", ref, "")
+
+    def release_approved(self, reply: OutboundReply, *, sender_key: str) -> DeliveryResult:
+        """Send a held draft a person approved. Refused only when delivery is ``off``.
+
+        The mode, language and handler gates exist to stop the assistant
+        sending on its own; a person approving a specific text is the decision
+        those gates defer to, so they do not apply. The caps do not apply
+        either (they bound the assistant, not staff), but the send is counted.
+        ``off`` is the switch that stops all delivery, so it refuses.
+        """
+        if self.mode is DeliveryMode.OFF:
+            raise ReleaseRefusedError("delivery is off")
         ref = self._send(reply)
         self.caps.record_send(sender_key, reply.thread_key)
         return DeliveryResult(Route.SEND, "sent", ref, "")

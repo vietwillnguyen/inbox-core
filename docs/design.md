@@ -166,6 +166,25 @@ The guarantee that there is exactly one code path to the public is enforced by `
 The delivery section of the configuration defaults to the safe settings: mode `off`, no language signed off for automatic sending, a daily cap of 30, two conversations per sender per day, one bot reply per conversation, and UTC.
 An unknown mode in a configuration file is an error; `parse_mode`, for runtime settings such as an environment variable, reads anything unknown as `off`.
 
+### Held drafts and the acceptance rate
+
+A held reply is a draft waiting for a person, and its text is the outbound row's encrypted content.
+`Pipeline.drafts` is an `inbox_core.review.DraftReview` over the pipeline's store and delivery:
+
+- `pending(conversation_id)` lists drafts with the decision behind them: category, tier, confidence, classifier, sources and `held_because`, which the store now keeps.
+- `send(draft_id, reviewer=..., text=None)` sends a draft as written or edited.
+  It first claims the draft with an atomic compare-and-set (`held` to `reviewing`, one conditional `UPDATE` in SQL), so it is sent at most once across clicks, tabs and processes.
+  The send goes through `Delivery.release_approved`, a second, deliberate way into `Delivery._send`: it refuses under `off` and otherwise sends, without the mode, language and cap gates, because those stop the assistant acting alone and a person approving a specific text is what they defer to.
+  The send is still counted against the caps for later automatic replies.
+  A send that raises is marked `failed` and never retried, because it may or may not have reached the public.
+- `discard` and `expire_before(cutoff)` close a draft without sending it.
+- `outcomes(start, end)` counts `sent_as_written`, `sent_edited`, `discarded` and `expired` by when they were resolved.
+  `acceptance_rate` is sent as written over all resolved drafts, and `sent_rate` counts edited sends too.
+  A whitespace-only change counts as written.
+
+Reviewers are stored as identifiers such as `chatwoot-user:5`, never names or addresses, because the skeleton outlives the content.
+The source-walk tests pin `DraftReview.send` as the only send-shaped public name besides the sinks, and pin that it reaches the public only through `release_approved`.
+
 ## The conversation record
 
 `ConversationStore` is one protocol with two implementations: `store.memory.InMemoryConversationStore` in the core, and `store.sqlalchemy.SqlAlchemyConversationStore` behind the `sqlalchemy` extra.

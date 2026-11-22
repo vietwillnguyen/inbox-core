@@ -15,9 +15,11 @@ from inbox_core.messages import IncomingMessage
 from inbox_core.store import (
     BODY_CONTEXT,
     BOT_REPLY_ACTIONS,
+    REVIEW_ACTIONS,
     SENDER_CONTEXT,
     SUBJECT_CONTEXT,
     Conversation,
+    ReviewOutcome,
     StoredMessage,
     as_naive_utc,
 )
@@ -208,16 +210,116 @@ class InMemoryConversationStore:
             self._rows[stored.id] = _Row(stored, body=self._seal(text, BODY_CONTEXT))
             return stored
 
-    def finish_outbound(self, message_id: int, *, action: str, provider_ref: str | None) -> None:
+    def finish_outbound(
+        self, message_id: int, *, action: str, provider_ref: str | None, held_because: str = ""
+    ) -> None:
         """Record the delivery outcome; ``held`` and ``sent`` count as a bot reply."""
         with self._lock:
             row = self._row(message_id)
-            row.message = replace(row.message, action=action, provider_ref=provider_ref)
+            row.message = replace(
+                row.message,
+                action=action,
+                provider_ref=provider_ref,
+                held_because=held_because or None,
+            )
             if action in BOT_REPLY_ACTIONS:
                 conversation = self._conversations[row.message.conversation_id]
                 self._conversations[conversation.id] = replace(
                     conversation, bot_reply_count=conversation.bot_reply_count + 1
                 )
+
+    def get_message(self, message_id: int) -> StoredMessage | None:
+        """The message with this id, if any."""
+        with self._lock:
+            row = self._rows.get(message_id)
+            return None if row is None else row.message
+
+    def held_for_review(self, conversation_id: int) -> tuple[StoredMessage, ...]:
+        """Held outbound replies in the conversation, oldest first."""
+        with self._lock:
+            return tuple(
+                row.message
+                for row in self._rows.values()
+                if row.message.conversation_id == conversation_id
+                and row.message.direction == "outbound"
+                and row.message.action == "held"
+            )
+
+    def claim_held(self, message_id: int) -> bool:
+        """``held`` to ``reviewing``, atomically under the store's lock."""
+        with self._lock:
+            row = self._rows.get(message_id)
+            if row is None or row.message.direction != "outbound" or row.message.action != "held":
+                return False
+            row.message = replace(row.message, action="reviewing")
+            return True
+
+    def resolve_review(
+        self,
+        message_id: int,
+        *,
+        outcome: ReviewOutcome,
+        reviewer: str,
+        provider_ref: str | None = None,
+        text: str | None = None,
+    ) -> None:
+        """Finish a ``reviewing`` draft."""
+        with self._lock:
+            row = self._row(message_id)
+            if row.message.action != "reviewing":
+                raise ValueError(f"message id={message_id} is not being reviewed")
+            if text is not None and row.message.has_content:
+                row.body = self._seal(text, BODY_CONTEXT)
+            row.message = replace(
+                row.message,
+                action=REVIEW_ACTIONS[outcome],
+                review_outcome=outcome,
+                reviewed_by=reviewer,
+                reviewed_at=self._now(),
+                provider_ref=provider_ref if provider_ref is not None else row.message.provider_ref,
+            )
+
+    def fail_review(self, message_id: int) -> None:
+        """``reviewing`` to ``failed``."""
+        with self._lock:
+            row = self._row(message_id)
+            if row.message.action == "reviewing":
+                row.message = replace(row.message, action="failed")
+
+    def expire_held(self, before: datetime, *, reviewer: str) -> int:
+        """Expire held replies created before ``before``."""
+        bound = as_naive_utc(before)
+        with self._lock:
+            now = self._now()
+            expired = 0
+            for row in self._rows.values():
+                message = row.message
+                if (
+                    message.direction == "outbound"
+                    and message.action == "held"
+                    and message.created_at < bound
+                ):
+                    row.message = replace(
+                        message,
+                        action="expired",
+                        review_outcome="expired",
+                        reviewed_by=reviewer,
+                        reviewed_at=now,
+                    )
+                    expired += 1
+            return expired
+
+    def review_outcomes_between(self, start: datetime, end: datetime) -> dict[str, int]:
+        """Outcome counts over ``[start, end)`` of ``reviewed_at``."""
+        low, high = as_naive_utc(start), as_naive_utc(end)
+        counts: dict[str, int] = {}
+        with self._lock:
+            for row in self._rows.values():
+                message = row.message
+                outcome, at = message.review_outcome, message.reviewed_at
+                if outcome and at is not None and low <= at < high:
+                    counts[outcome] = counts.get(outcome, 0) + 1
+        return counts
 
     def outbound_for(self, reply_to_id: int) -> tuple[StoredMessage, ...]:
         """Outbound rows answering this inbound row, oldest first."""
