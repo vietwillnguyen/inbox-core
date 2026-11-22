@@ -93,3 +93,20 @@ Its error messages name the field and the message id, never the value, because a
 Prompts are rendered from the configuration by `prompts.render_triage_prompts`: the organisation's name and summary, each category's description, a seriousness order derived from the table (executive, then person-handled, then auto-answerable), and the language list.
 The prompt module contains no organisation's name, and a test checks that.
 The classifier is shown the subject and the body only, never the sender, and the system prompt tells the model the message is data, not instructions.
+
+## Guards
+
+A guard is one method, `check(message) -> GuardVerdict | None`, run before any model sees the message.
+A verdict either drops the message (`drop`) or sends it to a person without classifying it (`hand_off`).
+
+The core ships three channel-neutral guards:
+
+- `EmptyMessageGuard` drops a message with no text and no subject.
+- `OversizeGuard` hands a very long message to a person; it is not dropped, because a long message may be the important one.
+- `SenderFloodGuard` drops messages from one sender beyond a limit within a sliding window, counted by `sender_key` and forgotten when the window passes.
+
+The extension point for channel-specific guards is the same `Guard` protocol.
+A channel guard reads its own extension, for example `message.extension_as(EmailDetails).headers`, and is passed to the pipeline after `default_guards()`.
+`tests/test_guards.py` includes an email auto-reply guard written that way.
+A guard that raises fails closed to `hand_off`, and its reason keeps only the exception's type name.
+Verdict reasons are capped at 120 characters and must be fixed phrases, because they reach the audit record.
