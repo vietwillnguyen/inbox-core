@@ -20,6 +20,7 @@ from inbox_core.chatwoot.webhook import signature_for
 from inbox_core.crypto import generate_key_entry
 from inbox_core.pipeline import InMemoryAuditSink
 from tests.chatwoot.fake import ACCOUNT, BOT_TOKEN, FakeChatwoot
+from tests.helpers import track
 
 CHATWOOT_ORIGIN = "http://127.0.0.1:3910"
 PUBLIC_ORIGIN = "http://127.0.0.1:3912"
@@ -144,6 +145,7 @@ def build_stack(
         sleep=slept.append,
         clock=clock,
     )
+    track(parts.store)
     client = TestClient(create_app(parts.service), base_url=PUBLIC_ORIGIN)
     return Stack(chatwoot, parts, client, audit, clock, slept)
 

@@ -121,77 +121,82 @@ def build_service(
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     create_schema(engine)
     store = SqlAlchemyConversationStore(engine, cipher=cipher)
-    api = ChatwootApi(
-        settings.chatwoot_url, settings.account_id, settings.bot_token, transport=transport
-    )
+    try:
+        api = ChatwootApi(
+            settings.chatwoot_url, settings.account_id, settings.bot_token, transport=transport
+        )
 
-    entries: tuple[KnowledgeEntry, ...] = ()
-    retriever = InMemoryRetriever(())
-    if config is None or handlers is None:
-        from inbox_core.examples.demo import EXAMPLE_DIR, example_retriever
+        entries: tuple[KnowledgeEntry, ...] = ()
+        retriever = InMemoryRetriever(())
+        if config is None or handlers is None:
+            from inbox_core.examples.demo import EXAMPLE_DIR, example_retriever
 
-        config_path = source.get("INBOX_CORE_CONFIG", "").strip()
-        knowledge_path = source.get("INBOX_CORE_KNOWLEDGE", "").strip()
-        config = config or load_config(Path(config_path or EXAMPLE_DIR / "client.toml"))
-        if knowledge_path:
-            entries = load_markdown_knowledge(Path(knowledge_path))
-            retriever = InMemoryRetriever(entries)
+            config_path = source.get("INBOX_CORE_CONFIG", "").strip()
+            knowledge_path = source.get("INBOX_CORE_KNOWLEDGE", "").strip()
+            config = config or load_config(Path(config_path or EXAMPLE_DIR / "client.toml"))
+            if knowledge_path:
+                entries = load_markdown_knowledge(Path(knowledge_path))
+                retriever = InMemoryRetriever(entries)
+            else:
+                retriever = example_retriever()
+                entries = load_markdown_knowledge(EXAMPLE_DIR / "knowledge.md")
+        kind = source.get("INBOX_CORE_CLASSIFIER", "litellm").strip()
+        generator: Generator
+        if kind == "example-keywords":
+            from inbox_core.examples.demo import KeywordClassifier
+
+            classifier = classifier or KeywordClassifier()
+            generator = ExtractiveGenerator()
+        elif kind == "litellm":
+            from inbox_core.adapters.litellm import LiteLLMClassifier, LiteLLMGenerator
+
+            classifier = classifier or LiteLLMClassifier(config)
+            generator = LiteLLMGenerator()
         else:
-            retriever = example_retriever()
-            entries = load_markdown_knowledge(EXAMPLE_DIR / "knowledge.md")
-    kind = source.get("INBOX_CORE_CLASSIFIER", "litellm").strip()
-    generator: Generator
-    if kind == "example-keywords":
-        from inbox_core.examples.demo import KeywordClassifier
+            raise SettingsError("INBOX_CORE_CLASSIFIER must be litellm or example-keywords")
+        handlers = handlers or default_handlers(config, retriever, generator)
+        raw_mode = source.get("INBOX_CORE_MODE", "").strip()
+        mode = parse_mode(raw_mode) if raw_mode else None
+        audit_path = source.get("INBOX_CORE_AUDIT_PATH", "").strip()
+        audit = audit or (JsonlAuditSink(audit_path) if audit_path else LoggingAuditSink())
 
-        classifier = classifier or KeywordClassifier()
-        generator = ExtractiveGenerator()
-    elif kind == "litellm":
-        from inbox_core.adapters.litellm import LiteLLMClassifier, LiteLLMGenerator
-
-        classifier = classifier or LiteLLMClassifier(config)
-        generator = LiteLLMGenerator()
-    else:
-        raise SettingsError("INBOX_CORE_CLASSIFIER must be litellm or example-keywords")
-    handlers = handlers or default_handlers(config, retriever, generator)
-    raw_mode = source.get("INBOX_CORE_MODE", "").strip()
-    mode = parse_mode(raw_mode) if raw_mode else None
-    audit_path = source.get("INBOX_CORE_AUDIT_PATH", "").strip()
-    audit = audit or (JsonlAuditSink(audit_path) if audit_path else LoggingAuditSink())
-
-    sink = ChatwootReplySink(api)
-    handoff = ChatwootHandOff(api, assignee_id=settings.assignee_id)
-    pipeline = Pipeline(
-        config=config,
-        classifier=classifier,
-        handlers=handlers,
-        sink=sink,
-        store=store,
-        notifier=LoggingNotifier(),
-        audit=audit,
-        handoff_actions=handoff,
-        mode_override=mode,
-    )
-    effective = mode if mode is not None else config.delivery.mode
-    fallback = Delivery(
-        sink,
-        mode=effective,
-        auto_languages=config.delivery.auto_languages,
-        caps=InMemorySendCaps.from_policy(config.delivery),
-    )
-    service = ChatwootService(
-        settings=settings,
-        config=config,
-        pipeline=pipeline,
-        store=store,
-        api=api,
-        handoff=handoff,
-        fallback_delivery=fallback,
-        source_titles={entry.id: entry.title for entry in entries},
-        submit=submit or thread_submit,
-        sleep=sleep or time.sleep,
-        clock=clock or time.time,
-    )
-    if effective is DeliveryMode.OFF:
-        logger.warning("delivery mode is off: nothing will be sent or drafted")
+        sink = ChatwootReplySink(api)
+        handoff = ChatwootHandOff(api, assignee_id=settings.assignee_id)
+        pipeline = Pipeline(
+            config=config,
+            classifier=classifier,
+            handlers=handlers,
+            sink=sink,
+            store=store,
+            notifier=LoggingNotifier(),
+            audit=audit,
+            handoff_actions=handoff,
+            mode_override=mode,
+        )
+        effective = mode if mode is not None else config.delivery.mode
+        fallback = Delivery(
+            sink,
+            mode=effective,
+            auto_languages=config.delivery.auto_languages,
+            caps=InMemorySendCaps.from_policy(config.delivery),
+        )
+        service = ChatwootService(
+            settings=settings,
+            config=config,
+            pipeline=pipeline,
+            store=store,
+            api=api,
+            handoff=handoff,
+            fallback_delivery=fallback,
+            source_titles={entry.id: entry.title for entry in entries},
+            submit=submit or thread_submit,
+            sleep=sleep or time.sleep,
+            clock=clock or time.time,
+        )
+        if effective is DeliveryMode.OFF:
+            logger.warning("delivery mode is off: nothing will be sent or drafted")
+    except BaseException:
+        # Nothing else holds the engine yet; do not leak its connections.
+        engine.dispose()
+        raise
     return ServiceParts(service, pipeline, store, api)

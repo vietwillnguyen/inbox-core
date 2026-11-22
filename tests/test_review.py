@@ -21,7 +21,7 @@ from inbox_core.review import (
 )
 from inbox_core.store.memory import InMemoryConversationStore
 from inbox_core.testing.fakes import FakeClassifier, RecordingSink, signals
-from tests.helpers import ADDRESS, message
+from tests.helpers import ADDRESS, message, track
 from tests.test_pipeline import ENTRIES, HOLDING, QUESTION, harness
 
 NOW = datetime(2026, 5, 1, 9, 0, tzinfo=UTC)
@@ -54,7 +54,7 @@ def make_store(kind: str, tmp_path: Path, clock: Clock, *, with_cipher: bool = T
 
     engine = create_engine(f"sqlite:///{tmp_path / 'review.db'}")
     create_schema(engine)
-    return SqlAlchemyConversationStore(engine, cipher=key, clock=clock)
+    return track(SqlAlchemyConversationStore(engine, cipher=key, clock=clock))
 
 
 def drafted(store_kind: str, tmp_path: Path, **kwargs: Any) -> tuple[Any, Clock]:

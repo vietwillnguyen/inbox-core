@@ -63,7 +63,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     from inbox_core.chatwoot.service import create_app
 
     parts = build_service(settings)
-    uvicorn.run(create_app(parts.service), host=args.host, port=args.port, access_log=False)
+    try:
+        uvicorn.run(create_app(parts.service), host=args.host, port=args.port, access_log=False)
+    finally:
+        parts.store.close()
     return 0
 
 
