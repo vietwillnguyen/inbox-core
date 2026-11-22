@@ -277,6 +277,13 @@ class ConversationStore(Protocol):
         """Delete the content of every message in this sender's conversations."""
         ...
 
+    def erase_content_before(self, cutoff: datetime) -> int:
+        """Delete the content of every message created before ``cutoff``; keep the rows.
+
+        ``cutoff`` may be aware or naive UTC. Returns how many messages lost content.
+        """
+        ...
+
 
 class StoreSendCaps:
     """Send caps counted from the store, so they survive restarts and hold across processes.

@@ -415,6 +415,13 @@ class InMemoryConversationStore:
             }
             return self._erase(rows)
 
+    def erase_content_before(self, cutoff: datetime) -> int:
+        """Delete content from every message created before ``cutoff``; keep the rows."""
+        bound = as_naive_utc(cutoff)
+        with self._lock:
+            rows = {k: r for k, r in self._rows.items() if r.message.created_at < bound}
+            return self._erase(rows)
+
     def erase_sender(self, sender_key: str) -> int:
         """Delete content from every message in this sender's conversations."""
         with self._lock:

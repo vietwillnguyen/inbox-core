@@ -40,7 +40,7 @@ It does not guarantee:
 - **That an answer is correct.** A grounded answer uses only retrieved knowledge entries and refuses when nothing relevant is found, but a model can still misread an entry. Measure it with the groundedness runner before turning on `auto`, and use `draft` mode first.
 - **That the classifier is accurate.** The tier rules make low confidence and sensitive categories safe, but a classifier that confidently mislabels a sensitive message as an FAQ will be answered. That is what the triage evaluation and its 100 percent executive-recall gate are for.
 - **Anything about your code.** Your channel adapter, your own logging and your hosting are yours; run the privacy sweep over them.
-- **Retention.** The store deletes content when asked; it does not decide when.
+- **Retention, unless you schedule it.** The store deletes content when asked, and `inbox_core.retention` is the job that asks (content older than N days, keeping the skeleton); running it on a schedule is yours.
 - **Exactly-once sending under every crash.** If a process dies after a reply leaves but before it is recorded, the next attempt hands off to a person rather than risk a second send.
 - **Shared limits across processes for the in-memory parts.** The flood guard and `InMemorySendCaps` are per process; use `StoreSendCaps` for caps that hold across processes and restarts.
 

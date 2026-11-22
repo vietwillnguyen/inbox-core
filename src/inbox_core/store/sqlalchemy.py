@@ -565,6 +565,11 @@ class SqlAlchemyConversationStore:
             self._one(connection, conversations, conversation_id)
             return self._erase(connection, messages.c.conversation_id == conversation_id)
 
+    def erase_content_before(self, cutoff: datetime) -> int:
+        """Delete content from every message created before ``cutoff``; keep the rows."""
+        with self._engine.begin() as connection:
+            return self._erase(connection, messages.c.created_at < as_naive_utc(cutoff))
+
     def erase_sender(self, sender_key: str) -> int:
         """Delete content from every message in this sender's conversations."""
         owned = select(conversations.c.id).where(conversations.c.sender_key == sender_key)

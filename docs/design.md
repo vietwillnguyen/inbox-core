@@ -206,6 +206,12 @@ Properties every implementation keeps:
   Without a cipher, no content is stored at all.
 - **Delete content, keep the skeleton.** `erase_conversation` and `erase_sender` remove the encrypted content and set `content_erased_at`, and keep the rows, because dedupe, the caps and the metrics read them.
 
+### Retention
+
+`ConversationStore.erase_content_before(cutoff)` deletes the content of every message created before the cutoff and keeps the rows, like the other erase methods.
+`inbox_core.retention.run_retention(store, days=N)` is the job: it first expires held drafts older than the cutoff (recorded as `expired` by reviewer `retention`), so nobody can approve a reply to a message whose text is going, and then erases the content.
+`python -m inbox_core.retention --database-url URL --days N` runs it once against a SQL store and prints a report of numbers only; erasing needs no encryption key.
+
 `StoreSendCaps` counts the day's sends from the store, so caps survive a restart and hold across processes.
 
 ### Encryption
