@@ -13,7 +13,13 @@ from typing import Any
 import pytest
 
 from inbox_core.chatwoot.tab_auth import TabSigner
-from tests.chatwoot.conftest import CHATWOOT_ORIGIN, PUBLIC_ORIGIN, TAB_SECRET, Stack
+from tests.chatwoot.conftest import (
+    CHATWOOT_ORIGIN,
+    PUBLIC_ORIGIN,
+    TAB_SECRET,
+    Stack,
+    message_payload,
+)
 from tests.chatwoot.fake import (
     AGENT_TOKEN,
     BOT_TOKEN,
@@ -203,6 +209,30 @@ class TestHappyPath:
             f"inbox-core draft {draft['id']} sent as written by agent 5."
         )
         assert drafts(draft_stack, session, 20).json()["drafts"] == []
+        assert "draft-pending" not in draft_stack.chatwoot.conversations[20]["labels"]
+
+    def test_the_pending_label_stays_while_a_draft_still_waits(self, draft_stack: Stack) -> None:
+        held(draft_stack, 20, 400)
+        # Two drafts in one conversation: give it back to the bot after the first.
+        found = draft_stack.parts.store.find_conversation("chatwoot", "20")
+        assert found is not None
+        draft_stack.parts.store.resume(found.id)  # let the bot draft a second reply
+        draft_stack.chatwoot.message(401, 20, "And on Saturdays?")
+        draft_stack.webhook(message_payload(20, 401, "And on Saturdays?"))
+        session = session_of(draft_stack)
+        listed = drafts(draft_stack, session, 20).json()["drafts"]
+        assert len(listed) == 2
+        discard(draft_stack, session, listed[0])
+        assert "draft-pending" in draft_stack.chatwoot.conversations[20]["labels"]
+        discard(draft_stack, session, listed[1])
+        assert "draft-pending" not in draft_stack.chatwoot.conversations[20]["labels"]
+
+    def test_a_failure_clearing_the_label_does_not_undo_the_send(self, draft_stack: Stack) -> None:
+        held(draft_stack)
+        session = session_of(draft_stack)
+        draft = first_draft(draft_stack, session)
+        draft_stack.chatwoot.failures["/labels"] = 1
+        assert send(draft_stack, session, draft).status_code == 200
 
     def test_send_edited(self, draft_stack: Stack) -> None:
         held(draft_stack)

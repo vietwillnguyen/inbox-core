@@ -31,7 +31,10 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol, runtime_checkable
 
 __all__ = [
+    "HANDOFF_LABEL",
     "HANDOFF_STEPS",
+    "REVIEW_LABEL",
+    "UNAVAILABLE_LABEL",
     "HandOffActions",
     "HandOffPurpose",
     "HandOffRequest",

@@ -28,11 +28,13 @@
   <section class="card" id="sign-in" hidden>
     <h2>Sign in to review drafts</h2>
     <p class="muted">Paste your own Chatwoot access token. inbox-core asks Chatwoot who it belongs to, then forgets it.
-      You will stay signed in in this browser tab for a short while.</p>
-    <form id="sign-in-form" class="stack" autocomplete="off">
-      <label for="token">Access token</label>
-      <input id="token" name="token" type="password" spellcheck="false" autocomplete="off" required minlength="8" maxlength="256">
-      <p class="hint">In Chatwoot: your avatar, then Profile settings, then Access token.</p>
+      Your sign-in lasts a short while, in this browser tab only.</p>
+    <form id="sign-in-form" class="form" autocomplete="off">
+      <div class="field">
+        <label for="token">Access token</label>
+        <input id="token" name="token" type="password" spellcheck="false" autocomplete="off" required minlength="8" maxlength="256">
+        <p class="hint">In Chatwoot: your avatar, then Profile settings, then Access token.</p>
+      </div>
       <div class="row"><button type="submit" class="primary" id="sign-in-button">Sign in</button></div>
     </form>
   </section>

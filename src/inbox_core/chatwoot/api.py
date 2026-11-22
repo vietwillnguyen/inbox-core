@@ -274,6 +274,22 @@ class ChatwootApi:
             ),
         )
 
+    def remove_labels(self, conversation_id: int, labels: tuple[str, ...]) -> None:
+        """Take labels off the conversation, keeping the rest."""
+        current = self.get_conversation(conversation_id).labels
+        kept = [label for label in current if label not in labels]
+        if len(kept) == len(current):
+            return
+        self._check(
+            "labels",
+            lambda: conversation_add_labels.sync_detailed(
+                self.account_id,
+                conversation_id,
+                client=self._client,
+                body=ConversationAddLabelsBody(labels=kept),
+            ),
+        )
+
     def get_conversation(self, conversation_id: int) -> ConversationFacts:
         """One conversation's account, inbox, status, labels and contact."""
         response = self._check(

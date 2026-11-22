@@ -67,6 +67,16 @@ def test_open_assign_and_label() -> None:
     ]
 
 
+def test_remove_labels_keeps_the_rest_and_skips_a_no_op() -> None:
+    fake = FakeChatwoot()
+    fake.conversation(4)
+    fake.conversations[4]["labels"] = ["vip", "draft-pending"]
+    client = api(fake)
+    client.remove_labels(4, ("draft-pending",))
+    client.remove_labels(4, ("draft-pending",))
+    assert fake.writes == [("labels", 4, ["vip"])]
+
+
 def test_get_conversation_reads_its_facts() -> None:
     fake = FakeChatwoot()
     fake.conversation(4, inbox=2, contact=77)

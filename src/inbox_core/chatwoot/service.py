@@ -59,7 +59,7 @@ from inbox_core.chatwoot.tab_auth import (
 from inbox_core.chatwoot.webhook import DeliveryLog, WebhookEvent, check_webhook, classify_event
 from inbox_core.config import ClientConfig
 from inbox_core.delivery import Delivery, ReleaseRefusedError
-from inbox_core.handoff import HandOffActions, HandOffRequest
+from inbox_core.handoff import REVIEW_LABEL, HandOffActions, HandOffRequest
 from inbox_core.messages import IncomingMessage, OutboundReply, make_sender_key
 from inbox_core.pipeline import AuditRecord, Pipeline
 from inbox_core.review import (
@@ -535,7 +535,7 @@ class ChatwootService:
         except ValueError:
             raise _Refused(400, "a reply cannot be empty", "empty text") from None
         how = "edited" if result.outcome == "sent_edited" else "as written"
-        self._note(
+        self._after_review(
             conversation_id, f"inbox-core draft {draft_id} sent {how} by agent {session.agent_id}."
         )
         return {"draft_id": draft_id, "outcome": result.outcome, "reviewer": result.reviewer}
@@ -561,10 +561,20 @@ class ChatwootService:
             result = self._pipeline.drafts.discard(draft_id, reviewer=session.reviewer)
         except DraftNotPendingError:
             raise _Refused(409, "this draft was already dealt with", "draft not pending") from None
-        self._note(
+        self._after_review(
             conversation_id, f"inbox-core draft {draft_id} discarded by agent {session.agent_id}."
         )
         return {"draft_id": draft_id, "outcome": result.outcome, "reviewer": result.reviewer}
+
+    def _after_review(self, conversation_id: int, text: str) -> None:
+        """A staff note saying who did what, and the pending label off once nothing waits."""
+        self._note(conversation_id, text)
+        found = self._store.find_conversation(CHANNEL, str(conversation_id))
+        if found is not None and not self._store.held_for_review(found.id):
+            try:
+                self._api.remove_labels(conversation_id, (REVIEW_LABEL,))
+            except ChatwootError as exc:
+                logger.warning("could not clear the review label: %s", exc.status)
 
     def _note(self, conversation_id: int, text: str) -> None:
         try:
