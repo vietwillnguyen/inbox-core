@@ -19,7 +19,7 @@ from inbox_core.examples.demo import (
     example_config,
     example_knowledge,
 )
-from inbox_core.messages import make_sender_key
+from inbox_core.messages import IncomingMessage, make_sender_key
 from inbox_core.pipeline import AuditSink, Notifier, Pipeline
 from inbox_core.testing.fakes import RecordingSink
 from inbox_core.testing.privacy import run_privacy_sweep
@@ -63,6 +63,32 @@ class TestTheKeywordClassifier:
         # never let a sensitive message through on the example's own golden set.
         metrics = evaluate_triage(KeywordClassifier(), golden(), example_config().triage)
         assert metrics.passes_executive_gate(), metrics.missed_executive
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "I want to make a complaint about how a volunteer spoke to me.",
+            "Can you send me the workshop dates? Se you soon, Mi",
+        ],
+    )
+    def test_common_english_words_are_not_read_as_spanish(self, text: str) -> None:
+        found = KeywordClassifier().classify(message_with(text))
+        assert found.language == "en"
+
+    def test_spanish_is_still_spanish(self) -> None:
+        found = KeywordClassifier().classify(message_with("Quiero hacerme socia de la biblioteca"))
+        assert found.language == "es"
+
+
+def message_with(text: str) -> IncomingMessage:
+    return IncomingMessage(
+        channel="web",
+        thread_key="t",
+        provider_message_id="m",
+        sender_key=make_sender_key("visitor@example.com"),
+        sender_address="visitor@example.com",
+        text=text,
+    )
 
 
 def run(*argv: str) -> tuple[int, str]:

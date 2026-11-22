@@ -200,9 +200,7 @@ _SPANISH = _rx(
     r"\bdel\b",
     r"\buna\b",
     r"\bpara\b",
-    r"\bme\b",
-    r"\bse\b",
-    r"\bmi\b",
+    # Not "me", "se" or "mi": they are English words and initials too.
 )
 _QUESTION = _rx(r"\?", r"^(what|when|where|how|can|do|does|is|are)\b")
 
