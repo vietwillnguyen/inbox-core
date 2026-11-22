@@ -50,9 +50,10 @@ target-version = "py312"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "N", "S", "D", "PT", "RET", "C4"]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "N", "S", "D", "PT", "RET", "C4", "DTZ"]
 ignore = [
     "D105", # magic methods document themselves
+    "D401", # docstrings here open with a noun phrase, not an imperative
     "D107", # __init__ is documented on the class
     "D203", # conflicts with D211
     "D213", # conflicts with D212
