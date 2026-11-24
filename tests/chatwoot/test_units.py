@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -148,6 +149,67 @@ class TestWiring:
     def test_litellm_is_the_default_and_needs_its_extra(self, tmp_path: Path) -> None:
         with pytest.raises(ImportError, match="inbox-core\\[litellm\\]"):
             build_service(settings(tmp_path), env={})
+
+    def test_the_model_and_its_gateway_come_from_the_environment(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[dict[str, Any]] = []
+
+        def completion(**kwargs: Any) -> dict[str, Any]:
+            calls.append(kwargs)
+            if "response_format" in kwargs:
+                content = json.dumps(
+                    {
+                        "category": "faq",
+                        "language": "en",
+                        "confidence": 0.95,
+                        "asks_for_human": False,
+                        "mentions_money_or_commitment": False,
+                    }
+                )
+            else:
+                content = "The library is open on Wednesdays from 5pm to 8pm."
+            return {"choices": [{"message": {"content": content}}]}
+
+        monkeypatch.setattr("inbox_core.adapters.litellm.load_completion", lambda: completion)
+        stack = build_stack(
+            tmp_path,
+            env={
+                "INBOX_CORE_CLASSIFIER": "litellm",
+                "INBOX_CORE_MODEL": "litellm_proxy/demo-model",
+                "INBOX_CORE_MODEL_API_BASE": "http://gateway.test:4000",
+                "INBOX_CORE_MODEL_API_KEY": "sk-example-gateway-key",
+            },
+        )
+        stack.visitor_says(40, 1, "When are you open?")
+        assert len(calls) == 2
+        for call in calls:
+            assert call["model"] == "litellm_proxy/demo-model"
+            assert call["api_base"] == "http://gateway.test:4000"
+            assert call["api_key"] == "sk-example-gateway-key"
+        assert stack.chatwoot.public_messages(40)
+        stack.parts.store.close()
+
+    def test_without_model_settings_the_default_model_is_called_directly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from inbox_core.adapters.litellm import DEFAULT_MODEL
+
+        calls: list[dict[str, Any]] = []
+
+        def completion(**kwargs: Any) -> dict[str, Any]:
+            calls.append(kwargs)
+            raise ConnectionError("no network in tests")
+
+        monkeypatch.setattr("inbox_core.adapters.litellm.load_completion", lambda: completion)
+        stack = build_stack(tmp_path, env={"INBOX_CORE_CLASSIFIER": "litellm"})
+        stack.visitor_says(41, 1, "When are you open?")
+        assert calls
+        for call in calls:
+            assert call["model"] == DEFAULT_MODEL
+            assert "api_base" not in call
+            assert "api_key" not in call
+        stack.parts.store.close()
 
     def test_a_client_config_and_knowledge_from_files(self, tmp_path: Path) -> None:
         from inbox_core.examples.demo import EXAMPLE_DIR

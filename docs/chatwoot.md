@@ -46,6 +46,8 @@ For a real deployment set `INBOX_CORE_CLASSIFIER=litellm` (the default), install
 | `INBOX_CORE_ASSIGNEE_ID` | Optional agent id that hand-offs are assigned to |
 | `INBOX_CORE_MODE` | Optional runtime override of the delivery mode; anything unknown reads as `off` |
 | `INBOX_CORE_CLASSIFIER`, `INBOX_CORE_CONFIG`, `INBOX_CORE_KNOWLEDGE`, `INBOX_CORE_AUDIT_PATH` | See above |
+| `INBOX_CORE_MODEL` | With `litellm`, the model both the classifier and the grounded answer call; default Gemini Flash-Lite (`gemini/gemini-3.5-flash-lite`) |
+| `INBOX_CORE_MODEL_API_BASE`, `INBOX_CORE_MODEL_API_KEY` | Optional: a LiteLLM gateway and its key, with `INBOX_CORE_MODEL` set to `litellm_proxy/<model group>`; without them LiteLLM calls the provider with the key in its own variable |
 
 Chatwoot itself needs `SAFE_FETCH_ALLOW_PRIVATE_NETWORK=true` when the service is on a private network (SafeFetch blocks private addresses otherwise), and the stack sets `DISABLE_TELEMETRY=true` and `ENABLE_ACCOUNT_SIGNUP=false`.
 
