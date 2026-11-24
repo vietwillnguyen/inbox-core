@@ -1,19 +1,35 @@
 # Idempotent setup of one client's Chatwoot, run with `rails runner` inside the
-# rails container by stack.sh. Made-up organisation and people only.
-# Prints KEY=VALUE lines on stdout, which stack.sh writes to the gitignored
+# rails container by deploy/chatwoot/stack.sh and deploy/demo/demo.sh.
+# Made-up organisation and people only.
+# Prints KEY=VALUE lines on stdout, which the scripts write to their gitignored
 # .local/tokens.env. Nothing here is a real account.
+#
+# The organisation's names default to the worked example's. The public demo
+# sets them, turns off the test fixtures (a volunteer agent and a second inbox
+# for the draft tab's access checks) and widget attachments, and limits the
+# pages that may embed the widget.
 admin_email = ENV.fetch('CHATWOOT_ADMIN_EMAIL')
 admin_password = ENV.fetch('CHATWOOT_ADMIN_PASSWORD')
-agent_email = ENV.fetch('CHATWOOT_AGENT_EMAIL')
-agent_password = ENV.fetch('CHATWOOT_AGENT_PASSWORD')
+test_fixtures = ENV.fetch('TEST_FIXTURES', 'true') == 'true'
+agent_email = ENV.fetch('CHATWOOT_AGENT_EMAIL') if test_fixtures
+agent_password = ENV.fetch('CHATWOOT_AGENT_PASSWORD') if test_fixtures
 bot_url = ENV.fetch('BOT_OUTGOING_URL')
 tab_url = ENV.fetch('DASHBOARD_APP_URL')
 widget_origin = ENV.fetch('WIDGET_ORIGIN')
 fallback_text = ENV.fetch('FALLBACK_TEXT')
+org_name = ENV.fetch('ORG_NAME', 'Brambleford Tool Library')
+tagline = ENV.fetch('WIDGET_TAGLINE', 'Ask about opening hours, borrowing and workshops.')
+bot_name = ENV.fetch('BOT_NAME', 'Library assistant')
+category_labels = ENV.fetch('CATEGORY_LABELS',
+                            'faq membership reservation damage_report donation press complaint other').split
+attachments = ENV.fetch('WIDGET_ATTACHMENTS', 'true') == 'true'
+allowed_domains = ENV.fetch('WIDGET_ALLOWED_DOMAINS', '')
 
 Redis::Alfred.delete(Redis::Alfred::CHATWOOT_INSTALLATION_ONBOARDING)
 
-account = Account.find_or_create_by!(name: 'Brambleford Tool Library')
+account = Account.find_or_create_by!(name: org_name)
+# No visitor IP addresses on contacts (configs_controller.rb, contact.rb). Off by default; kept off on purpose.
+account.disable_features!('ip_lookup')
 
 def person(email, password, name, type = nil)
   user = User.find_by(email: email)
@@ -27,20 +43,28 @@ def person(email, password, name, type = nil)
 end
 
 admin = person(admin_email, admin_password, 'Example Admin', 'SuperAdmin')
-agent = person(agent_email, agent_password, 'Example Volunteer')
 AccountUser.find_or_create_by!(account: account, user: admin) { |au| au.role = :administrator }
-AccountUser.find_or_create_by!(account: account, user: agent) { |au| au.role = :agent }
+people = [admin]
+if test_fixtures
+  agent = person(agent_email, agent_password, 'Example Volunteer')
+  AccountUser.find_or_create_by!(account: account, user: agent) { |au| au.role = :agent }
+  people << agent
+end
 
 # The visitor sees the inbox's name in the widget header, so it is the organisation's.
-inbox = account.inboxes.find_by(name: ['Website chat', 'Brambleford Tool Library'])
+inbox = account.inboxes.find_by(name: ['Website chat', org_name])
 unless inbox
   widget = Channel::WebWidget.create!(account: account, website_url: widget_origin,
-                                      welcome_title: 'Brambleford Tool Library',
-                                      welcome_tagline: 'Ask about opening hours, borrowing and workshops.')
-  inbox = Inbox.create!(account: account, name: 'Brambleford Tool Library', channel: widget)
+                                      welcome_title: org_name, welcome_tagline: tagline)
+  inbox = Inbox.create!(account: account, name: org_name, channel: widget)
 end
-inbox.update!(name: 'Brambleford Tool Library')
-[admin, agent].each { |user| InboxMember.find_or_create_by!(user: user, inbox: inbox) }
+inbox.update!(name: org_name)
+# The widget asks for nothing and stores nothing beyond the conversation: no
+# transcript emails, no satisfaction survey, and (in the demo) no file uploads.
+inbox.channel.update!(welcome_title: org_name, welcome_tagline: tagline, continuity_via_email: false,
+                      attachments: attachments, allowed_domains: allowed_domains)
+inbox.update!(csat_survey_enabled: false)
+people.each { |user| InboxMember.find_or_create_by!(user: user, inbox: inbox) }
 # The email-collect prompt posts two template messages with a new conversation,
 # and the bot receives those too. When this service is down, each failed
 # delivery opens the conversation at the same moment and the fallback rule
@@ -49,23 +73,24 @@ inbox.update!(name: 'Brambleford Tool Library')
 inbox.update!(enable_email_collect: false)
 
 # A second inbox the volunteer is not a member of, for the draft tab's access checks.
-other = account.inboxes.find_by(name: 'Staff only')
-unless other
-  channel = Channel::Api.create!(account: account)
-  other = Inbox.create!(account: account, name: 'Staff only', channel: channel)
+if test_fixtures
+  other = account.inboxes.find_by(name: 'Staff only')
+  unless other
+    channel = Channel::Api.create!(account: account)
+    other = Inbox.create!(account: account, name: 'Staff only', channel: channel)
+  end
+  InboxMember.find_or_create_by!(user: admin, inbox: other)
 end
-InboxMember.find_or_create_by!(user: admin, inbox: other)
 
 # The visitor sees the bot's name on every answer.
-bot = AgentBot.find_by(account: account, name: ['inbox-core', 'Library assistant']) ||
-      AgentBot.create!(account: account, name: 'Library assistant')
-bot.update!(name: 'Library assistant', outgoing_url: bot_url,
+bot = AgentBot.find_by(account: account, name: ['inbox-core', bot_name]) ||
+      AgentBot.create!(account: account, name: bot_name)
+bot.update!(name: bot_name, outgoing_url: bot_url,
             description: 'inbox-core: guard, triage, handle, deliver, hand off')
 abi = AgentBotInbox.find_or_initialize_by(inbox: inbox)
 abi.update!(account: account, agent_bot: bot, status: :active)
 
-%w[inbox-core handoff draft-pending classifier-unavailable inbox-core-unavailable faq membership
-   reservation damage_report donation press complaint other].each do |title|
+(%w[inbox-core handoff draft-pending classifier-unavailable inbox-core-unavailable] + category_labels).each do |title|
   account.labels.find_or_create_by!(title: title)
 end
 
@@ -97,11 +122,13 @@ rule.update!(
 
 puts "CHATWOOT_ACCOUNT_ID=#{account.id}"
 puts "CHATWOOT_INBOX_ID=#{inbox.id}"
-puts "CHATWOOT_OTHER_INBOX_ID=#{other.id}"
+puts "CHATWOOT_OTHER_INBOX_ID=#{other.id}" if test_fixtures
 puts "CHATWOOT_WEBSITE_TOKEN=#{inbox.channel.website_token}"
 puts "CHATWOOT_BOT_TOKEN=#{bot.access_token.token}"
 puts "CHATWOOT_BOT_SECRET=#{bot.secret}"
 puts "CHATWOOT_ADMIN_TOKEN=#{admin.access_token.token}"
 puts "CHATWOOT_ADMIN_USER_ID=#{admin.id}"
-puts "CHATWOOT_AGENT_TOKEN=#{agent.access_token.token}"
-puts "CHATWOOT_AGENT_USER_ID=#{agent.id}"
+if test_fixtures
+  puts "CHATWOOT_AGENT_TOKEN=#{agent.access_token.token}"
+  puts "CHATWOOT_AGENT_USER_ID=#{agent.id}"
+end
