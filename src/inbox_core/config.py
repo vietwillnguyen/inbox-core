@@ -286,10 +286,14 @@ class DeliveryPolicy:
     message sent (or held) when a conversation is handed to a person, by
     language; :meth:`ClientConfig.holding_text` falls back to the default
     language. ``timezone`` is the organisation's, for when a day starts.
+    ``approval_categories`` lists auto-answered categories whose replies are
+    always held for a person to approve, whatever the mode: the assistant
+    drafts, a person sends.
     """
 
     mode: DeliveryMode = DeliveryMode.OFF
     auto_languages: frozenset[str] = frozenset()
+    approval_categories: frozenset[str] = frozenset()
     daily_send_cap: int = 30
     per_sender_daily_cap: int = 2
     max_bot_replies_per_conversation: int = 1
@@ -305,6 +309,9 @@ class DeliveryPolicy:
             problems.append("delivery.mode must be one of off, draft, auto")
         if not isinstance(auto_languages, frozenset):
             problems.append("delivery.auto_languages must be a set of language codes")
+        approval: object = self.approval_categories
+        if not isinstance(approval, frozenset):
+            problems.append("delivery.approval_categories must be a set of category names")
         for name in ("daily_send_cap", "per_sender_daily_cap", "max_bot_replies_per_conversation"):
             problem = _positive_int_problem(f"delivery.{name}", getattr(self, name))
             if problem:
@@ -351,6 +358,17 @@ class ClientConfig:
             problems.append(f"delivery.auto_languages names unconfigured language {code!r}")
         for code in sorted(set(self.delivery.holding) - set(languages)):
             problems.append(f"delivery.holding has text for unconfigured language {code!r}")
+        auto = self.triage.auto_answer_categories
+        for name in sorted(self.delivery.approval_categories):
+            if self.triage.category(name) is None:
+                problems.append(
+                    f"delivery.approval_categories names {name!r}, which is not a listed category"
+                )
+            elif name not in auto:
+                problems.append(
+                    f"delivery.approval_categories names {name!r}, which is never "
+                    "auto-answered, so there is no reply to approve"
+                )
         if problems:
             raise ConfigError(problems)
 
@@ -447,6 +465,7 @@ class _Reader:
             "max_bot_replies_per_conversation",
             "timezone",
             "holding",
+            "approval_categories",
         )
         table = self.table(data, "delivery", allowed)
         if table is None:
@@ -462,6 +481,11 @@ class _Reader:
             self.problems.append("delivery.auto_languages must be a list of language codes")
             return None
         values["auto_languages"] = frozenset(languages)
+        approval = values.get("approval_categories", [])
+        if not isinstance(approval, list) or not all(isinstance(c, str) for c in approval):
+            self.problems.append("delivery.approval_categories must be a list of category names")
+            return None
+        values["approval_categories"] = frozenset(approval)
         if not isinstance(values.get("holding", {}), Mapping):
             self.problems.append("delivery.holding must be a table of language = text")
             return None
