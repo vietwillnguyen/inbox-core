@@ -1,0 +1,78 @@
+# Quillmoor Cycle Works is made up. Quillmoor is not a real town, and nothing
+# here describes a real business, place or person. It is the public demo's
+# organisation: deliberately a small business rather than a volunteer group,
+# so the core is shown on a client unlike the one it was first built for.
+
+[organisation]
+name = "Quillmoor Cycle Works"
+summary = "a made-up bicycle repair, rental and parts shop in the fictional town of Quillmoor"
+
+[triage]
+confidence_threshold = 0.7
+fallback_category = "other"
+
+[triage.languages]
+en = "English"
+
+[[triage.categories]]
+name = "faq"
+auto_answer = true
+escalates_to = "needs_admin"
+description = "a general question about the shop: opening hours, where it is, what it repairs, rental bikes, classes, fitting, accessibility, refurbished and children's bikes"
+
+[[triage.categories]]
+name = "repair_advice"
+auto_answer = true
+escalates_to = "needs_admin"
+description = "the sender asks how to look after or fix a problem with their own bike themselves: gears, brakes, chain, tyres, e-bike batteries"
+
+[[triage.categories]]
+name = "booking"
+description = "the sender wants to book, move or cancel a repair, a service, a rental or a fitting"
+
+[[triage.categories]]
+name = "repair_status"
+description = "the sender asks about a bike or an order the shop already has: is it ready, what was done, when to collect"
+
+[[triage.categories]]
+name = "refund"
+escalates_to = "needs_executive"
+description = "the sender wants money back, disputes a charge, or a deposit was not returned"
+
+[[triage.categories]]
+name = "complaint"
+escalates_to = "needs_executive"
+description = "a complaint about the shop's work, its staff or how the sender was treated"
+
+[[triage.categories]]
+name = "safety"
+escalates_to = "needs_executive"
+description = "an accident, an injury, or a part failing in a way that could hurt someone, including after a repair"
+
+[[triage.categories]]
+name = "press"
+escalates_to = "needs_executive"
+description = "a journalist, blogger, researcher, sponsor or other business proposing something"
+
+[[triage.categories]]
+name = "other"
+description = "a real person writing about something none of the above covers, including anything that is not about the shop"
+
+[[triage.categories]]
+name = "automated"
+escalates_to = "skip"
+description = "not written by a person for this shop: newsletters, receipts, delivery failures, out-of-office replies"
+
+[delivery]
+mode = "auto"
+auto_languages = ["en"]
+# Repair advice is answered from the knowledge base but checked by a mechanic
+# before the visitor sees it: the public demo's approval path.
+approval_categories = ["repair_advice"]
+daily_send_cap = 300
+per_sender_daily_cap = 3
+max_bot_replies_per_conversation = 5
+timezone = "Europe/London"
+
+[delivery.holding]
+en = "Thanks for your message. This one needs a person, so I have passed it to the Quillmoor Cycle Works team. (This is a demo of a made-up shop, so a person may not reply.)"

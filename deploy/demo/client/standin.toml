@@ -1,0 +1,79 @@
+# The stand-in model's rules for the made-up Quillmoor Cycle Works.
+#
+# The stand-in is not a model and is not accurate. It lets the whole demo
+# bundle run, and its end-to-end suite pass, with no model key and no network:
+# the LiteLLM gateway serves it as the "stand-in" model group, and switching
+# DEMO_MODEL to "gemini" in the environment is the only change needed to use
+# the real model instead (docs/demo.md).
+#
+# Rules are tried in order, most serious first, and the first category with a
+# matching pattern wins. A message no rule matches is reported as
+# fallback_category with a confidence below the shop's threshold, so it goes to
+# a person, as a real model's unsure answer would. Patterns are Python regular
+# expressions, matched case-insensitively against the subject and the text.
+
+fallback_category = "other"
+language = "en"
+confidence = 0.9
+unsure_confidence = 0.3
+
+# Anything these match is reported in language "other", which the shop does
+# not support, so it goes to a person.
+other_language = ["\\bhola\\b", "\\bgracias\\b", "¿", "\\bbonjour\\b", "\\bmerci\\b", "\\bdanke\\b"]
+
+asks_for_human = [
+    "\\b(speak|talk|chat) (to|with) (a |an )?(real |actual )?(person|human|someone|somebody|mechanic|owner|manager)",
+    "\\bput me (through|in touch)",
+    "\\bcall me\\b",
+]
+
+mentions_money = [
+    "£", "\\$", "€", "\\bmoney\\b", "\\bprice", "\\bcost", "how much", "\\brefund", "\\bpay",
+    "\\bdeposit", "\\bfee", "\\bcharge", "\\bcard\\b", "\\binvoice", "\\bsponsor", "\\bcheap",
+]
+
+[[rules]]
+category = "automated"
+patterns = ["automatic reply", "out of the office", "unsubscribe", "delivery status notification", "could not be delivered", "newsletter"]
+
+[[rules]]
+category = "safety"
+patterns = ["\\bfailed\\b", "came off", "\\bfell\\b", "\\bcrash", "\\bhurt\\b", "injur", "accident", "came loose", "\\bbleed", "hospital"]
+
+[[rules]]
+category = "refund"
+patterns = ["money back", "\\brefund", "deposit", "overcharg", "charged twice", "dispute"]
+
+[[rules]]
+category = "complaint"
+patterns = ["\\brude\\b", "complain", "complaint", "disappointed", "terrible service", "unacceptable"]
+
+[[rules]]
+category = "press"
+patterns = ["journalist", "interview", "reporter", "\\bblog", "sponsor", "research project", "partnership"]
+
+[[rules]]
+category = "repair_status"
+patterns = ["\\bready yet\\b", "is my bike ready", "dropped (it|my bike) off", "when can i collect", "status of my"]
+
+[[rules]]
+category = "booking"
+patterns = ["\\bbook\\b", "\\bbooking\\b", "(?<!without an )appointment", "reschedule", "\\bcancel", "move my", "reserve"]
+
+[[rules]]
+category = "repair_advice"
+patterns = [
+    "\\bgears?\\b.*\\b(skip|slip|jump)", "\\b(skip|slip|jump)\\w*\\b.*\\bgears?\\b", "squeak", "squeal",
+    "rubbing", "oil my chain", "\\bchain\\b.*\\b(oil|lube|rust|clean)", "tyre pressure", "pressure should",
+    "avoid punctures", "store my e-?bike battery", "battery over the winter", "look after my",
+]
+
+[[rules]]
+category = "faq"
+patterns = [
+    "opening hours", "\\bopen\\b", "\\bclosed?\\b", "where is", "\\bfind\\b", "entrance", "\\bbus\\b",
+    "parking", "electric bikes?", "e-?bikes?", "walk in", "without an appointment", "\\brent\\b",
+    "rental", "\\bhire\\b", "helmet", "\\block\\b", "wheelchair", "accessib", "trikes?", "class",
+    "learn", "second hand", "refurbished", "trade-?ins?", "outgrown", "fitting", "voucher",
+    "\\bservice\\b", "\\babren\\b", "horario",
+]
