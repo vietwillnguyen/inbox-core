@@ -69,6 +69,9 @@ Each container has a memory limit in `compose.yaml` (4.6 GiB in total), so one r
 - The always-free AMD micro shapes (1 GB) are too small: Chatwoot alone needs more.
 - Disk: about 6 GB of images plus the data, so the default 47 GB boot volume is plenty.
 
+The bundle was also brought up with every container on `linux/arm64` (under emulation on an amd64 machine): it seeded, served, and passed `demo.sh smoke`.
+The first start under emulation took about twenty minutes; a real Ampere core runs these images natively.
+
 ## Before you start: prove the real model
 
 The bundle's end-to-end suite runs on the stand-in, which is not a model.
@@ -101,6 +104,7 @@ sudo netfilter-persistent save
 ```
 
 Install Docker Engine with the compose plugin, git and Python 3 (Docker's own apt repository has arm64 packages), and add your user to the `docker` group.
+If Redis exits with a warning about `ARM64-COW-BUG`, the kernel is too old for it to save safely: update the kernel rather than silencing the warning (Ubuntu 24.04's is fine).
 
 ### 2. DNS
 

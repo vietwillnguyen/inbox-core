@@ -12,7 +12,9 @@ which the default run deselects. If the bundle is not up, they are skipped.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import socket
+from collections.abc import Callable, Iterator
+from typing import Any
 
 import httpx
 import pytest
@@ -26,8 +28,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.demo_e2e)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def localhost_names() -> Iterator[None]:
+    """Resolve every ``*.localhost`` name to this machine (RFC 6761), as browsers do.
+
+    Not every system resolver answers for subdomains of ``localhost``.
+    """
+    original = socket.getaddrinfo
+
+    def resolve(host: Any, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(host, str) and (host == "localhost" or host.endswith(".localhost")):
+            host = "127.0.0.1"
+        return original(host, *args, **kwargs)
+
+    socket.getaddrinfo = resolve
+    yield
+    socket.getaddrinfo = original
+
+
 @pytest.fixture(scope="session")
-def bundle() -> dict[str, str]:
+def bundle(localhost_names: None) -> dict[str, str]:
     if not (LOCAL / "tokens.env").exists():
         pytest.skip("the demo bundle is not set up: run deploy/demo/demo.sh up")
     values = {**read_env("bundle.env"), **read_env("tokens.env")}

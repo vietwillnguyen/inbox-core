@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
 import sys
 import time
 import urllib.error
@@ -19,6 +20,23 @@ import urllib.request
 from typing import Any
 
 QUESTION = "What are your opening hours?"
+
+
+_getaddrinfo = socket.getaddrinfo
+
+
+def _loopback_for_localhost(host: Any, *args: Any, **kwargs: Any) -> Any:
+    """Resolve every ``*.localhost`` name to this machine (RFC 6761), as browsers do.
+
+    The local bundle serves ``demo.localhost`` and its subdomains; not every
+    system resolver answers for subdomains of ``localhost``.
+    """
+    if isinstance(host, str) and (host == "localhost" or host.endswith(".localhost")):
+        host = "127.0.0.1"
+    return _getaddrinfo(host, *args, **kwargs)
+
+
+socket.getaddrinfo = _loopback_for_localhost
 
 
 def fetch(method: str, url: str, body: Any = None, headers: dict[str, str] | None = None) -> Any:
