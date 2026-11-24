@@ -134,6 +134,16 @@ uv run pytest -m e2e tests/e2e      # the end-to-end suite against it
 Webhooks are checked against Chatwoot's signature, held drafts are reviewed in a tab inside the conversation whose agent is verified with Chatwoot, Chatwoot is set to log without visitor text (proved by the suite), and a retention job deletes old transcripts.
 [`docs/chatwoot.md`](docs/chatwoot.md) has the details and the residual risks.
 
+## The public demo
+
+```sh
+./deploy/demo/demo.sh up      # Chatwoot, the service, a LiteLLM gateway, a TLS proxy; a made-up bike shop
+```
+
+A deployable bundle for one small server (an Oracle Cloud Ampere instance is enough): a made-up shop's knowledge base and configuration, per-address rate limits, a daily model spend cap, an hourly reset of conversations, and a stand-in model so it runs and is tested end to end with no key.
+Switching to Gemini is one setting.
+[`docs/demo.md`](docs/demo.md) is the runbook: sizing, DNS, settings, bring-up, smoke test, reset and teardown.
+
 ## A worked example
 
 [`examples/`](examples/README.md) describes the Brambleford Tool Library, a made-up organisation with a configuration, thirty knowledge entries and a forty-three message golden set in English and Spanish.
