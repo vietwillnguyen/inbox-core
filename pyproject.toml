@@ -99,9 +99,10 @@ ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers --strict-config -m 'not e2e'"
+addopts = "-ra --strict-markers --strict-config -m 'not e2e and not demo_e2e'"
 markers = [
     "e2e: needs the local Chatwoot stack (deploy/chatwoot); run with -m e2e, see docs/chatwoot.md",
+    "demo_e2e: needs the demo bundle (deploy/demo); run with -m demo_e2e, see docs/demo.md",
 ]
 xfail_strict = true
 filterwarnings = ["error"]

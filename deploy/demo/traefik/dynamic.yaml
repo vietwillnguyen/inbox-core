@@ -1,0 +1,149 @@
+# The demo's routes, rate limits and headers. Traefik renders this file as a Go
+# template, so the host names and limits come from the bundle's environment
+# (deploy/demo/demo.sh writes them). Three host names, one server:
+#
+#   DEMO_DOMAIN           the visitor's page with the chat widget
+#   chat.DEMO_DOMAIN      Chatwoot: the widget's API and the owner's dashboard
+#   bot.DEMO_DOMAIN       inbox-core's draft tab, framed inside the dashboard
+#
+# inbox-core's webhook is not routed here at all: Chatwoot reaches it on the
+# compose network. Neither is the LiteLLM gateway. Anything not listed below,
+# on any host, is answered 404 by the page server.
+#
+# A rate-limited request is answered 429 by Traefik, between the visitor and
+# Chatwoot. Nothing here sits between Chatwoot and inbox-core, which must never
+# answer 429 or 500 (docs/chatwoot.md).
+{{ $page := env "DEMO_DOMAIN" }}
+{{ $chat := printf "chat.%s" (env "DEMO_DOMAIN") }}
+{{ $bot := printf "bot.%s" (env "DEMO_DOMAIN") }}
+{{ $tls := eq (env "DEMO_TLS") "on" }}
+{{ $entry := "web" }}{{ if $tls }}{{ $entry = "websecure" }}{{ end }}
+
+http:
+  routers:
+    page:
+      rule: "Host(`{{ $page }}`)"
+      entryPoints: ["{{ $entry }}"]
+      service: page
+      middlewares: ["headers", "general"]
+      {{- if $tls }}
+      tls: {certResolver: le}
+      {{- end }}
+
+    chatwoot:
+      rule: "Host(`{{ $chat }}`)"
+      entryPoints: ["{{ $entry }}"]
+      service: chatwoot
+      middlewares: ["chat-headers", "general"]
+      {{- if $tls }}
+      tls: {certResolver: le}
+      {{- end }}
+
+    # What a visitor posts: a new conversation or a message. The tightest limit.
+    visitor-messages:
+      rule: "Host(`{{ $chat }}`) && Method(`POST`) && (Path(`/api/v1/widget/messages`) || Path(`/api/v1/widget/conversations`))"
+      priority: 100
+      entryPoints: ["{{ $entry }}"]
+      service: chatwoot
+      middlewares: ["chat-headers", "visitor-messages"]
+      {{- if $tls }}
+      tls: {certResolver: le}
+      {{- end }}
+
+    # Every widget load without a cookie makes a new contact in Chatwoot.
+    visitor-contacts:
+      rule: "Host(`{{ $chat }}`) && (Path(`/widget`) || Path(`/api/v1/widget/config`))"
+      priority: 90
+      entryPoints: ["{{ $entry }}"]
+      service: chatwoot
+      middlewares: ["chat-headers", "visitor-contacts"]
+      {{- if $tls }}
+      tls: {certResolver: le}
+      {{- end }}
+
+    # No file uploads from visitors, whatever the widget is told, and no
+    # instance administration from the internet (use the server's shell).
+    chatwoot-refused:
+      rule: "Host(`{{ $chat }}`) && (HeaderRegexp(`Content-Type`, `(?i)^multipart/`) || PathPrefix(`/super_admin`) || PathPrefix(`/monitoring`) || PathPrefix(`/rails/active_storage/direct_uploads`))"
+      priority: 200
+      entryPoints: ["{{ $entry }}"]
+      service: page
+      {{- if $tls }}
+      tls: {certResolver: le}
+      {{- end }}
+
+    # Only the draft tab is public; the webhook, /healthz and /metrics are not.
+    draft-tab:
+      rule: "Host(`{{ $bot }}`) && (Path(`/tab`) || PathPrefix(`/tab/`))"
+      entryPoints: ["{{ $entry }}"]
+      service: inbox-core
+      middlewares: ["general"]
+      {{- if $tls }}
+      tls: {certResolver: le}
+      {{- end }}
+
+    bot-other:
+      rule: "Host(`{{ $bot }}`)"
+      priority: 1
+      entryPoints: ["{{ $entry }}"]
+      service: page
+      {{- if $tls }}
+      tls: {certResolver: le}
+      {{- end }}
+
+    {{- if $tls }}
+
+    # Plain HTTP only redirects (Traefik answers the certificate challenge itself).
+    to-https:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      entryPoints: ["web"]
+      service: page
+      middlewares: ["to-https"]
+    {{- end }}
+
+  middlewares:
+    to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+    visitor-messages:
+      rateLimit:
+        average: {{ env "DEMO_RATE_MESSAGES_PER_MINUTE" }}
+        period: 1m
+        burst: {{ env "DEMO_RATE_MESSAGES_BURST" }}
+    visitor-contacts:
+      rateLimit:
+        average: {{ env "DEMO_RATE_CONTACTS_PER_HOUR" }}
+        period: 1h
+        burst: {{ env "DEMO_RATE_CONTACTS_BURST" }}
+    general:
+      rateLimit:
+        average: 600
+        period: 1m
+        burst: 200
+    headers:
+      headers:
+        frameDeny: true
+        contentTypeNosniff: true
+        referrerPolicy: no-referrer
+        {{- if $tls }}
+        stsSeconds: 31536000
+        {{- end }}
+    chat-headers:
+      headers:
+        contentTypeNosniff: true
+        {{- if $tls }}
+        stsSeconds: 31536000
+        {{- end }}
+
+  services:
+    page:
+      loadBalancer:
+        servers: [{url: "http://page:8080"}]
+    chatwoot:
+      loadBalancer:
+        servers: [{url: "http://rails:3000"}]
+    inbox-core:
+      loadBalancer:
+        servers: [{url: "http://inbox-core:8000"}]

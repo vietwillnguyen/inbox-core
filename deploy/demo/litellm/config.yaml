@@ -1,0 +1,67 @@
+# The demo's LiteLLM gateway. inbox-core reaches every model through it
+# (INBOX_CORE_MODEL=litellm_proxy/<group>), and it is never published outside
+# the compose network.
+#
+# Two model groups, chosen by DEMO_MODEL in the bundle's .env:
+#   stand-in  the default. A deterministic stand-in served by
+#             standin_provider.py: no key, no network, not a model.
+#   gemini    Gemini Flash-Lite with GEMINI_API_KEY. The only change needed to
+#             switch the demo to the real model is DEMO_MODEL=gemini.
+#
+# The spend cap is LiteLLM's deployment budget: max_budget US dollars per
+# budget_duration, counted in Redis so a restart does not reset it. Once it is
+# reached the gateway refuses the call, inbox-core's classifier is then
+# unavailable, and the core fails closed: the visitor gets the shop's fixed
+# holding message and the conversation goes to a person. No model is called
+# again until the window rolls over.
+#
+# The prices below are set explicitly rather than read from LiteLLM's model
+# map, so the cap counts even for a model the bundled map does not know, and
+# they are deliberately pessimistic: check them against Google's current price
+# list and lower them only on purpose. The stand-in is given the same prices,
+# so the cap is tested the way it runs.
+
+model_list:
+  - model_name: stand-in
+    litellm_params:
+      model: standin/quillmoor
+      input_cost_per_token: 0.0000005
+      output_cost_per_token: 0.000004
+      max_budget: os.environ/DEMO_DAILY_BUDGET_USD
+      budget_duration: 1d
+  - model_name: gemini
+    litellm_params:
+      model: os.environ/DEMO_GEMINI_MODEL
+      api_key: os.environ/GEMINI_API_KEY
+      # Without it Gemini Flash-Lite can spend tokens on a thought summary.
+      reasoning_effort: none
+      timeout: 20
+      # Gemini's own requests-per-minute bound for this deployment.
+      rpm: 30
+      input_cost_per_token: 0.0000005
+      output_cost_per_token: 0.000004
+      max_budget: os.environ/DEMO_DAILY_BUDGET_USD
+      budget_duration: 1d
+
+litellm_settings:
+  custom_provider_map:
+    - provider: standin
+      custom_handler: standin_provider.standin
+  drop_params: true
+  telemetry: false
+  # Keep prompts and replies out of LiteLLM's logs and callbacks.
+  turn_off_message_logging: true
+  # No retries of a refused call: a refusal is the cap working.
+  num_retries: 0
+
+router_settings:
+  # Where the deployment budgets are counted, so they survive a restart.
+  redis_host: redis
+  redis_port: 6379
+  redis_password: os.environ/REDIS_PASSWORD
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # No per-request rows, which is where LiteLLM would keep prompts.
+  disable_spend_logs: true
+  store_prompts_in_spend_logs: false

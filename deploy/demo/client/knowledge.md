@@ -108,7 +108,7 @@ Places are booked at the counter.
 ## QCW-23 Accessibility and adapted bikes
 Keywords: accessible, accessibility, wheelchair, step-free, adapted, trike, tricycle, disability, disabled, hand cycle
 The shop and workshop are step-free.
-Adapted bikes, trikes and a hand cycle can be tried in the yard during opening hours.
+Adapted bikes, trikes and a hand cycle can be tried out in the yard whenever the shop is open.
 
 ## QCW-24 Gift vouchers
 Keywords: gift, voucher, present, birthday
