@@ -23,7 +23,9 @@ def test_a_question_the_shop_covers_gets_a_grounded_answer_through_the_gateway(
     person.say("What are your opening hours?")
     (reply,) = until(person.replies)
     assert "Tuesday to Friday from 8am to 6pm" in reply
-    assert "Source: QCW-01 Opening hours" in reply
+    # The visitor sees the answer alone; what it was based on is kept for the owner.
+    assert "Source" not in reply
+    assert "QCW-" not in reply
     record = only_record(person)
     assert (record["category"], record["tier"], record["decision"]) == (
         "faq",
@@ -34,6 +36,9 @@ def test_a_question_the_shop_covers_gets_a_grounded_answer_through_the_gateway(
     assert record["classifier"] == "litellm:litellm_proxy/stand-in"
     assert record["sources"][0] == "QCW-01"  # type: ignore[index]
     assert "handoff" not in owner.conversation(person.conversation_id or 0)["labels"]
+    notes = until(lambda: owner.notes(person.conversation_id or 0))
+    assert any("QCW-01 Opening hours" in note for note in notes)
+    assert not any("QCW-" in text for text in person.everything())
 
 
 @pytest.mark.parametrize(

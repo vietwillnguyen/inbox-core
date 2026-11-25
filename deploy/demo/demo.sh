@@ -10,7 +10,7 @@
 # Let's Encrypt, and the model named by DEMO_MODEL. See docs/demo.md.
 #
 #   up              write secrets if missing, start everything, seed, wait
-#   smoke           check every public route and one answered question
+#   smoke           check every public route, one answered question and its audit record
 #   status          what is running
 #   memory          each container's memory use now, and the total
 #   reset [DAYS]    delete conversations older than DAYS (default 1) right now
@@ -238,7 +238,8 @@ case "${1:-help}" in
   smoke)
     set -a; . .local/tokens.env; set +a
     python3 smoke.py --page "$PAGE_ORIGIN" --chat "$CHAT_ORIGIN" --bot "$BOT_ORIGIN" \
-      --website-token "$CHATWOOT_WEBSITE_TOKEN"
+      --website-token "$CHATWOOT_WEBSITE_TOKEN" \
+      --compose-project "$PROJECT" --compose-env-file .local/bundle.env
     ;;
   status) "${COMPOSE[@]}" ps ;;
   memory)

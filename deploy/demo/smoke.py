@@ -4,7 +4,9 @@
 
 Standard library only, so it runs on the server without installing anything.
 It asks one question as a new visitor through the widget's own API and waits
-for the grounded answer, then checks that what must not be public is not.
+for the grounded answer, checks that the answer names no knowledge source to
+the visitor and that the service's audit record (read from its container log)
+keeps the sources, then checks that what must not be public is not.
 Exit code 0 means every check passed. It prints no message text but its own.
 """
 
@@ -13,12 +15,15 @@ from __future__ import annotations
 import argparse
 import json
 import socket
+import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
+HERE = Path(__file__).resolve().parent
 QUESTION = "What are your opening hours?"
 
 
@@ -64,31 +69,65 @@ def check(name: str, ok: bool) -> bool:
     return ok
 
 
-def ask(chat: str, website_token: str, timeout: float) -> str:
-    """Ask the question as a new visitor and return the first reply, or ''."""
+def ask(chat: str, website_token: str, timeout: float) -> tuple[int | None, str]:
+    """Ask the question as a new visitor: the conversation id and first reply, or ''."""
     query = f"?website_token={website_token}"
     status, config = fetch("POST", f"{chat}/api/v1/widget/config{query}")
     if status != 200:
-        return ""
+        return None, ""
     auth = {"X-Auth-Token": config["website_channel_config"]["auth_token"]}
     stamp = time.strftime("%a %b %d %Y")
-    status, _ = fetch(
+    status, created = fetch(
         "POST",
         f"{chat}/api/v1/widget/conversations{query}",
         {"contact": {"name": "Smoke test"}, "message": {"content": QUESTION, "timestamp": stamp}},
         auth,
     )
     if status != 200:
-        return ""
+        return None, ""
+    conversation_id = created.get("id") if isinstance(created, dict) else None
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         status, found = fetch("GET", f"{chat}/api/v1/widget/messages{query}", headers=auth)
         messages = found if isinstance(found, list) else (found or {}).get("payload", [])
         replies = [m.get("content") or "" for m in messages if m.get("message_type") == 1]
         if replies:
-            return str(replies[0])
+            return conversation_id, str(replies[0])
         time.sleep(1)
-    return ""
+    return conversation_id, ""
+
+
+def audit_sources(project: str, env_file: str, conversation_id: int | None) -> list[str]:
+    """The sources in the service's audit records for one conversation, from its log."""
+    if conversation_id is None:
+        return []
+    logs = subprocess.run(  # noqa: S603 - fixed arguments
+        [  # noqa: S607
+            "docker",
+            "compose",
+            "-p",
+            project,
+            "-f",
+            str(HERE / "compose.yaml"),
+            "--env-file",
+            env_file,
+            "logs",
+            "--no-color",
+            "--no-log-prefix",
+            "inbox-core",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    ).stdout
+    sources: list[str] = []
+    for line in logs.splitlines():
+        if " inbox_core.audit " in line and "{" in line:
+            record = json.loads(line[line.index("{") :])
+            if record.get("thread_key") == str(conversation_id):
+                sources.extend(record.get("sources") or [])
+    return sources
 
 
 def main() -> int:
@@ -98,6 +137,8 @@ def main() -> int:
     parser.add_argument("--chat", required=True)
     parser.add_argument("--bot", required=True)
     parser.add_argument("--website-token", required=True)
+    parser.add_argument("--compose-project", required=True)
+    parser.add_argument("--compose-env-file", required=True)
     parser.add_argument("--timeout", type=float, default=60)
     args = parser.parse_args()
 
@@ -112,8 +153,21 @@ def main() -> int:
         )
     admin = fetch("GET", f"{args.chat}/super_admin")[0]
     results.append(check("Chatwoot's super admin is not public", admin == 404))
-    reply = ask(args.chat, args.website_token, args.timeout)
-    results.append(check("a visitor's question gets a grounded answer", "Source: QCW-" in reply))
+    conversation_id, reply = ask(args.chat, args.website_token, args.timeout)
+    results.append(check("a visitor's question gets an answer", bool(reply)))
+    results.append(
+        check(
+            "the answer names no source to the visitor",
+            bool(reply) and "Source" not in reply and "QCW-" not in reply,
+        )
+    )
+    sources = audit_sources(args.compose_project, args.compose_env_file, conversation_id)
+    results.append(
+        check(
+            "the audit record keeps the answer's sources",
+            any(source.startswith("QCW-") for source in sources),
+        )
+    )
     return 0 if all(results) else 1
 
 
