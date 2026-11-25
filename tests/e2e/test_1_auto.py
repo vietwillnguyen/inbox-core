@@ -1,4 +1,4 @@
-"""Auto mode in the real widget: answers with sources, hand-off, a person taking over."""
+"""Auto mode in the real widget: answers, sources kept for staff, hand-off, a person taking over."""
 
 from __future__ import annotations
 
@@ -13,17 +13,36 @@ MODE = "auto"
 pytestmark = pytest.mark.usefixtures("mode")
 
 
-def test_a_question_is_answered_in_the_widget_with_its_source(
+SOURCE_NOTE = (
+    "inbox-core answered this message automatically.\n"
+    "Category: faq. Tier: auto_answer.\n"
+    "Sources: TL-01 Opening hours."
+)
+
+
+def test_a_question_is_answered_in_the_widget_and_its_source_is_kept_for_staff(
     visitor: Callable[[], Visitor], admin: Agent
 ) -> None:
     person = visitor()
     person.say("What are your opening hours?")
     (answer,) = until(person.replies, timeout=30)
     assert "Wednesdays from 5pm to 8pm" in answer
-    assert answer.endswith("Source: TL-01 Opening hours")
     assert person.conversation_id is not None
     record = until(lambda: audit_for(person.conversation_id or 0), timeout=10)[-1]
     assert (record["decision"], record["sources"]) == ("answered", ["TL-01"])
+    # Staff see what the answer was based on, as a private note after it.
+    conversation_id = person.conversation_id
+
+    def staff_notes() -> list[str] | None:
+        found = [m["content"] for m in admin.messages(conversation_id) if m["private"]]
+        return found or None
+
+    assert until(staff_notes, timeout=10) == [SOURCE_NOTE]
+    # The visitor's widget shows the answer alone: no note, no source id or title.
+    seen = [str(m.get("content") or "") for m in person.messages()]
+    assert SOURCE_NOTE not in seen
+    assert not any("Source" in text or "TL-01" in text for text in seen)
+    assert "Opening hours" not in answer
     # An answered conversation stays the bot's and is not put in agents' queues.
     assert admin.conversation(person.conversation_id)["status"] == "pending"
 

@@ -219,9 +219,15 @@ class TestGroundedAnswer:
         result = GroundedAnswer(Broken(), RecordingGenerator(), min_score=0.1).handle(request())
         assert result.reason == "retrieval failed (OSError)"
 
-    def test_cites_sources_when_asked(self) -> None:
-        result = grounded(cite=True).handle(request("opening hours on Saturday"))
-        assert result.text.endswith("Source: KB-01 Opening hours")
+    def test_the_reply_text_never_names_its_sources(self) -> None:
+        result = grounded().handle(request("opening hours on Saturday"))
+        assert [(s.id, s.title) for s in result.sources] == [("KB-01", "Opening hours")]
+        assert "Source" not in result.text
+        assert "KB-01" not in result.text
+
+    def test_there_is_no_option_to_cite_in_the_text(self) -> None:
+        with pytest.raises(TypeError):
+            grounded(cite=True)
 
     def test_spanish_keywords_find_an_english_entry(self) -> None:
         result = grounded().handle(request("Tengo un pinchazo en la rueda", language="es"))
