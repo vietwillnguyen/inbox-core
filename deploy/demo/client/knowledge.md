@@ -3,14 +3,17 @@
 Quillmoor Cycle Works is made up, and so is the town of Quillmoor.
 Nothing here describes a real business, place or person.
 Every price, time and address below is invented for the demo.
+The public pages some entries name in a `URL:` line are on the reserved `.example` domain and do not exist.
 
 ## QCW-01 Opening hours
 Keywords: when, open, opening, hours, times, closed, today, tomorrow, weekend, saturday, sunday, monday, tuesday, wednesday, thursday, friday
+URL: https://quillmoor-cycles.example/visit
 The shop is open Tuesday to Friday from 8am to 6pm and on Saturdays from 9am to 4pm.
 It is closed on Sundays and Mondays.
 
 ## QCW-02 Where the shop is
 Keywords: where, address, located, location, find, entrance, directions, canal, bridge
+URL: https://quillmoor-cycles.example/visit
 The shop is at 12 Lantern Row in Quillmoor, beside the canal bridge.
 The entrance is under the blue arch, and the workshop door is at the back of the yard.
 
@@ -57,6 +60,7 @@ Bikes should be collected within seven days.
 
 ## QCW-12 Rental bikes
 Keywords: rent, rental, rentals, hire, kinds, types, which, fleet, available, city bike, hybrid, e-bike, kids, children, tag-along
+URL: https://quillmoor-cycles.example/rentals
 The rental fleet has city bikes, hybrids, e-bikes, children's bikes and tag-alongs, by the day or by the week.
 
 ## QCW-13 What you need to rent
@@ -102,6 +106,7 @@ The shop sells refurbished second-hand bikes, each checked by a mechanic and gua
 
 ## QCW-22 Free maintenance class
 Keywords: class, lesson, learn, course, workshop, teach, free, beginner
+URL: https://quillmoor-cycles.example/classes
 A free class on fixing a puncture and looking after a chain runs on the first Saturday of every month at 10am.
 Places are booked at the counter.
 
@@ -116,6 +121,7 @@ Gift vouchers are sold at the counter and can be spent on anything in the shop f
 
 ## QCW-25 Gears skipping or slipping
 Keywords: gears, gear, skipping, slipping, jumping, changing, shifting, derailleur, clicking, indexing
+URL: https://quillmoor-cycles.example/guides/gears
 Skipping gears are most often a slack cable.
 With the bike in the gear it skips in, turn the barrel adjuster where the cable leaves the shifter half a turn anticlockwise and try again; repeat a little at a time.
 If the chain or cassette is worn, adjusting will not help and a mechanic should look at it.

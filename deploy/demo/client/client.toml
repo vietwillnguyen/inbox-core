@@ -69,6 +69,10 @@ auto_languages = ["en"]
 # Repair advice is answered from the knowledge base but checked by a mechanic
 # before the visitor sees it: the public demo's approval path.
 approval_categories = ["repair_advice"]
+# The widget shows the feature: an answer ends with a link to the public page
+# of each entry it used that names one in knowledge.md ("More: <link>"),
+# never an entry's id or title. The pages are on the reserved .example domain.
+show_sources = true
 daily_send_cap = 300
 per_sender_daily_cap = 3
 max_bot_replies_per_conversation = 5

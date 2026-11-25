@@ -42,6 +42,8 @@ def test_repair_advice_is_held_until_the_owner_approves_it(
     )
     assert "barrel adjuster" in draft["text"]
     assert draft["sources"][0]["id"] == "QCW-25"
+    # The owner reviews exactly what the visitor will get, public link included.
+    assert "\n\nMore: https://quillmoor-cycles.example/guides/gears" in draft["text"]
     assert "Source" not in draft["text"]
     assert "QCW-" not in draft["text"]
     assert any("Sources: QCW-25" in note for note in owner.notes(person.conversation_id or 0))
@@ -59,6 +61,7 @@ def test_repair_advice_is_held_until_the_owner_approves_it(
     assert sent["outcome"] == "sent_edited"
     assert until(person.replies) == [edited]
     assert not any("QCW-" in text for text in person.everything())
+    assert not any("Gears skipping" in text for text in person.everything())
     admin_id = bundle["CHATWOOT_ADMIN_USER_ID"]
     assert any(
         f"sent edited by agent {admin_id}" in note
