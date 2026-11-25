@@ -66,6 +66,18 @@ def demo(*args: str, timeout: float = 300) -> str:
     return done.stdout
 
 
+def refill_message_limit(bundle: dict[str, str]) -> None:
+    """Wait until the proxy's per-address message bucket is full again.
+
+    Every test posts from this one address, so a test that needs the whole
+    burst (or must not be refused) waits for the bucket the earlier tests
+    drained to refill, instead of depending on how fast they ran.
+    """
+    per_minute = int(bundle["DEMO_RATE_MESSAGES_PER_MINUTE"])
+    burst = int(bundle["DEMO_RATE_MESSAGES_BURST"])
+    time.sleep(burst * 60 / per_minute + 1)
+
+
 def rails(ruby: str) -> str:
     return compose("exec", "-T", "rails", "bundle", "exec", "rails", "runner", ruby, timeout=240)
 

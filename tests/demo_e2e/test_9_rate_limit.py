@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from tests.demo_e2e.bundle import Visitor
+from tests.demo_e2e.bundle import Visitor, refill_message_limit
 
 
 def test_posting_faster_than_the_limit_is_refused_at_the_proxy(
     visitor: Callable[[], Visitor], bundle: dict[str, str]
 ) -> None:
     burst = int(bundle["DEMO_RATE_MESSAGES_BURST"])
+    refill_message_limit(bundle)
     person = visitor()
     statuses = [person.post(f"Message {n}").status_code for n in range(burst + 15)]
     assert statuses[0] == 200
