@@ -78,6 +78,78 @@ jobs:
         if: always()
         run: docker compose -p inboxcore-demo -f deploy/demo/compose.yaml --env-file deploy/demo/.local/bundle.env down -v || true
 
+  terraform:
+    name: terraform ${{ matrix.config }} (fmt, validate, tflint, test)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [deploy/aws, deploy/aws/state-bucket]
+    env:
+      TERRAFORM_VERSION: "1.17.2"
+      TFLINT_VERSION: "0.66.0"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install terraform and tflint, checked against their published checksums
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin" && cd "$RUNNER_TEMP/bin"
+          base="https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}"
+          curl -sSfLO "${base}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+          curl -sSfL "${base}/terraform_${TERRAFORM_VERSION}_SHA256SUMS" | grep linux_amd64.zip | sha256sum -c
+          unzip -q "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" terraform
+          base="https://github.com/terraform-linters/tflint/releases/download/v${TFLINT_VERSION}"
+          curl -sSfLO "${base}/tflint_linux_amd64.zip"
+          curl -sSfL "${base}/checksums.txt" | grep ' tflint_linux_amd64.zip$' | sha256sum -c
+          unzip -q tflint_linux_amd64.zip tflint
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Format
+        run: terraform -chdir=${{ matrix.config }} fmt -check -recursive -diff
+      - name: Init (no backend, locked providers)
+        run: terraform -chdir=${{ matrix.config }} init -backend=false -input=false -lockfile=readonly
+      - name: Validate
+        run: terraform -chdir=${{ matrix.config }} validate
+      - name: tflint
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          tflint --chdir=${{ matrix.config }} --config="$GITHUB_WORKSPACE/deploy/aws/.tflint.hcl" --init
+          tflint --chdir=${{ matrix.config }} --config="$GITHUB_WORKSPACE/deploy/aws/.tflint.hcl" --format compact
+      - name: Test with mock providers (no cloud account)
+        run: terraform -chdir=${{ matrix.config }} test
+
+  iac-scan:
+    name: infrastructure security scan (checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - name: Scan deploy/aws
+        # Every skipped check carries its reason next to the resource.
+        run: uvx --from checkov==3.4.4 checkov -d deploy/aws --framework terraform --compact --quiet
+
+  shell:
+    name: shell scripts (shellcheck, deploy agent, bootstrap, tunnel proxy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck every script
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(git ls-files | xargs -r grep -lIE '^#!/(usr/)?bin/(env )?(ba)?sh' --)
+          printf '%s\n' "${scripts[@]}"
+          shellcheck "${scripts[@]}"
+      - name: Deploy agent against a local git remote, in a container
+        run: |
+          docker run --rm -v "$PWD:/src:ro" ubuntu:24.04 sh -c \
+            'apt-get update -q >/dev/null && apt-get install -y -q git python3 >/dev/null && /src/deploy/tests/agent_test.sh'
+      - name: Bootstrap on a fresh Ubuntu 24.04, in a container
+        run: docker run --rm -v "$PWD:/src:ro" ubuntu:24.04 /src/deploy/tests/bootstrap_test.sh
+      - name: The proxy in tunnel mode
+        run: ./deploy/tests/proxy_tunnel_test.sh
+
   secrets:
     name: secret scan
     runs-on: ubuntu-latest
