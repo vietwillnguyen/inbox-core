@@ -135,6 +135,36 @@ class TestAnswering:
         assert h.store.is_handled("web", "msg-1")
         assert h.audit.records == [record]
 
+    def test_no_reply_names_its_sources_sent_held_or_approved(self) -> None:
+        sent = harness()
+        sent.pipeline.process(message(QUESTION))
+        held = harness(mode="draft")
+        held.pipeline.process(message(QUESTION))
+        (draft,) = held.pipeline.drafts.pending(1)
+        held.pipeline.drafts.send(draft.id, reviewer="chatwoot-user:5")
+        for reply in (*sent.sink.sent, *held.sink.held, *held.sink.sent):
+            assert reply.text == ENTRIES[0].text
+            assert reply.sources == ("KB-01",)
+        assert [r.sources for r in (*sent.audit.records, *held.audit.records)] == [
+            ("KB-01",),
+            ("KB-01",),
+        ]
+
+    def test_a_client_that_opts_in_shows_its_sources_in_the_reply(self) -> None:
+        h = harness(client=config(show_sources=True))
+        h.pipeline.process(message(QUESTION))
+        assert [r.text for r in h.sink.sent] == [
+            f"{ENTRIES[0].text}\n\nSource: KB-01 Opening hours"
+        ]
+
+    def test_a_reply_without_sources_gets_no_source_line_even_when_opted_in(self) -> None:
+        h = harness(
+            client=config(show_sources=True),
+            classifier=FakeClassifier(default=signals("refund")),
+        )
+        h.pipeline.process(message("I want my money back"))
+        assert [r.text for r in h.sink.sent] == [HOLDING]
+
     def test_draft_mode_holds_and_never_sends(self) -> None:
         h = harness(mode="draft")
         record = h.pipeline.process(message(QUESTION))

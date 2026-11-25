@@ -9,7 +9,10 @@ the pipeline, so every handler inherits the same modes, gates and caps.
 Three built-ins:
 
 - :class:`GroundedAnswer` answers from retrieved knowledge entries and returns
-  the sources it used, refusing when nothing scores above its threshold.
+  the sources it used, refusing when nothing scores above its threshold. The
+  sources travel beside the text, never in it: the pipeline keeps them for
+  staff and adds them to what the public sees only when the client opts in
+  (``delivery.show_sources``).
 - :class:`Template` returns fixed text the client wrote, chosen by language.
 - :class:`HandOff` always hands off.
 
@@ -251,6 +254,7 @@ class GroundedAnswer:
     or generation fails. Only passages above the threshold are given to the
     generator, and those are the sources returned, so ``limit`` should match
     what the generator actually uses (1 for :class:`ExtractiveGenerator`).
+    The reply text is the generator's alone; it never names its sources.
     """
 
     def __init__(
@@ -260,7 +264,6 @@ class GroundedAnswer:
         *,
         min_score: float,
         limit: int = 3,
-        cite: bool = False,
         name: str = "grounded_answer",
     ) -> None:
         if limit < 1:
@@ -272,7 +275,6 @@ class GroundedAnswer:
         self._generator = generator
         self._min_score = min_score
         self._limit = limit
-        self._cite = cite
 
     def handle(self, request: HandlerRequest) -> HandlerResult:
         """A grounded reply with its sources, or a hand-off saying why not."""
@@ -315,9 +317,6 @@ class GroundedAnswer:
             return HandlerResult.hand_off(self.name, "the generator found the context insufficient")
 
         sources = tuple(Source(p.entry.id, p.entry.title, p.score) for p in passages)
-        if self._cite:
-            cited = "; ".join(f"{source.id} {source.title}" for source in sources)
-            text = f"{text}\n\nSource: {cited}"
         return HandlerResult.reply(self.name, text, sources=sources)
 
 

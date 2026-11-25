@@ -68,6 +68,10 @@ def test_a_draft_is_held_and_nothing_reaches_the_visitor(
         "draft mode",
     )
     assert draft["sources"] == [{"id": "TL-01", "title": "Opening hours"}]
+    assert "Source" not in draft["text"]
+    assert "TL-01" not in draft["text"]
+    notes = [m["content"] for m in admin.messages(person.conversation_id or 0) if m["private"]]
+    assert any("Sources: TL-01 Opening hours." in n for n in notes)
     found = admin.conversation(person.conversation_id or 0)
     assert found["status"] == "open"
     assert "draft-pending" in found["labels"]
@@ -81,6 +85,9 @@ def test_a_draft_sent_as_written_reaches_the_widget(
     assert response.json()["outcome"] == "sent_as_written"
     (reply,) = until(person.replies, timeout=15)
     assert reply == draft["text"]
+    for text in (str(m.get("content") or "") for m in person.messages()):
+        assert "Source" not in text
+        assert "TL-01" not in text
     agent_id = tokens["CHATWOOT_AGENT_USER_ID"]
     notes = [m["content"] for m in admin.messages(person.conversation_id or 0) if m["private"]]
     assert f"inbox-core draft {draft['id']} sent as written by agent {agent_id}." in notes

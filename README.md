@@ -34,6 +34,7 @@ It guarantees, and its tests check:
 - **`off` delivers nothing and `draft` never sends.** There is exactly one code path that can send to the public, and a test walks the package source to keep it that way.
 - **No message content in the core's logs, exceptions, notifications or audit records.** A reusable privacy sweep checks this, and you can run it against your own corpus and wiring.
 - **Stored text is encrypted** (AES-256-GCM with key rotation), and content can be deleted while the record of what happened is kept.
+- **Replies do not name their sources, and the sources are always kept for staff.** A grounded answer's knowledge entries are recorded in the audit record and the held draft, and a channel with a shared inbox posts them as a staff-only note after an answer is sent; the text the public sees has no source ids, titles or "Source:" line unless a client opts in with `delivery.show_sources = true`.
 - **A message is skipped only once it was handled**, not merely seen, so a crash does not silently drop it; and a delivery that may have happened is never repeated.
 
 It does not guarantee:

@@ -11,7 +11,10 @@ Every message takes the same steps, in this order:
 5. **Handle and deliver.** Only an ``auto_answer`` message reaches a handler,
    and only within the per-conversation reply cap. Its reply goes through
    :class:`inbox_core.delivery.Delivery`, which applies the mode, the language
-   gate and the caps.
+   gate and the caps. The reply never names the knowledge entries it was
+   written from (unless the client sets ``delivery.show_sources``): they go
+   into the audit record's ``sources``, the held draft, and, once an answer is
+   sent, a staff-only note through the channel's hand-off actions.
 6. **Hand off.** Everything else - an escalating tier, a handler that declined
    or failed, a failed delivery, delivery being off - is handed to a person: a
    holding message (through the same delivery rules), a notification, and the
@@ -50,7 +53,7 @@ from inbox_core.delivery import (
     SendCaps,
 )
 from inbox_core.guards import Guard, default_guards, run_guards
-from inbox_core.handlers import HandlerRegistry, HandlerRequest
+from inbox_core.handlers import HandlerRegistry, HandlerRequest, Source
 from inbox_core.handoff import (
     HandOffActions,
     HandOffPurpose,
@@ -253,10 +256,15 @@ class _Draft:
     delivery: str = ""
     held_because: str = ""
     sources: tuple[str, ...] = ()
+    cited: tuple[Source, ...] = ()
     guard: str = ""
     tags: tuple[str, ...] = ()
     handoff_failures: list[str] = field(default_factory=list)
     lease_owner: str = ""
+
+    @property
+    def titles(self) -> dict[str, str]:
+        return {source.id: source.title for source in self.cited}
 
     def take(self, decision: TriageDecision) -> None:
         self.category = decision.category
@@ -557,16 +565,22 @@ class Pipeline:
         if result.outcome == "hand_off":
             return result.reason
 
+        text = result.text
+        if self._config.delivery.show_sources and result.sources:
+            # The client opted in to showing the public what the reply is based on.
+            named = "; ".join(f"{source.id} {source.title}" for source in result.sources)
+            text = f"{text}\n\nSource: {named}"
         reply = OutboundReply(
             thread_key=message.thread_key,
             in_reply_to=message.provider_message_id,
             to_address=message.sender_address,
-            text=result.text,
+            text=text,
             language=decision.language,
             kind=result.kind,
             sources=tuple(source.id for source in result.sources),
         )
         draft.sources = reply.sources
+        draft.cited = result.sources
         approval_reason = HANDLER_APPROVAL
         requires_approval = result.requires_approval
         if not requires_approval and decision.category in self._config.delivery.approval_categories:
@@ -597,7 +611,42 @@ class Pipeline:
             self._bring_in_a_person("review", message, decision.tier, delivered.held_because, draft)
         draft.decision = "answered" if delivered.action == "sent" else "answer_held"
         self._store.mark_handled(row.id, draft.decision)
+        if delivered.action == "sent":
+            self._note_sources(message, decision, draft)
         return None
+
+    def _note_sources(
+        self, message: IncomingMessage, decision: TriageDecision, draft: _Draft
+    ) -> None:
+        """A staff-only note of what a sent answer was based on. Best effort."""
+        if not draft.sources:
+            return
+        request = HandOffRequest(
+            purpose="answered",
+            channel=message.channel,
+            thread_key=message.thread_key,
+            message_id=message.provider_message_id,
+            conversation_id=draft.conversation_id,
+            category=decision.category,
+            tier=decision.tier,
+            reason="",
+            labels=(),
+            note=handoff_note(
+                "answered",
+                category=decision.category,
+                tier=decision.tier,
+                reason="",
+                sources=draft.sources,
+                titles=draft.titles,
+            ),
+        )
+        try:
+            self._actions.add_internal_note(request)
+        except Exception as exc:
+            draft.handoff_failures.append("source_note")
+            logger.warning(
+                "source note failed for %s: %s", message.provider_message_id, type(exc).__name__
+            )
 
     def _deliver_once(
         self,
@@ -798,6 +847,7 @@ class Pipeline:
                 tier=tier or "needs_admin",
                 reason=reason,
                 sources=draft.sources,
+                titles=draft.titles,
             ),
         )
         actions = self._actions

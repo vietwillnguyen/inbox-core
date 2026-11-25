@@ -195,6 +195,9 @@ class TestHappyPath:
         assert draft["tier"] == "auto_answer"
         assert draft["held_because"] == "draft mode"
         assert draft["sources"] == [{"id": "TL-01", "title": "Opening hours"}]
+        # The tab shows the sources beside the draft; the text that goes out has none.
+        assert "Source" not in draft["text"]
+        assert "TL-01" not in draft["text"]
         response = send(draft_stack, session, draft)
         assert response.status_code == 200
         assert response.json() == {
