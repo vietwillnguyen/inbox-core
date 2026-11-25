@@ -7,9 +7,13 @@
 # names under demo.localhost, and the stand-in model, so it needs no key and no
 # network beyond pulling images. With a .env copied from .env.example (on the
 # server) it serves DEMO_DOMAIN on ports 80 and 443 with certificates from
-# Let's Encrypt, and the model named by DEMO_MODEL. See docs/demo.md.
+# Let's Encrypt, and the model named by DEMO_MODEL. With DEMO_TUNNEL=on in that
+# .env it publishes no port at all: a Cloudflare Tunnel connects out to the
+# proxy and Cloudflare serves the certificates. DEMO_ENV_FILE names a settings
+# file other than deploy/demo/.env. See docs/demo.md.
 #
 #   up              write secrets if missing, start everything, seed, wait
+#   settings        the mode and public origins this configuration gives
 #   smoke           check every public route and one answered question
 #   status          what is running
 #   memory          each container's memory use now, and the total
@@ -23,7 +27,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 PROJECT=inboxcore-demo
-COMPOSE=(docker compose -p "$PROJECT" -f compose.yaml --env-file .local/bundle.env)
+ENV_FILE=${DEMO_ENV_FILE:-.env}
 
 rand() { python3 -c "import secrets,sys; print(secrets.token_urlsafe(int(sys.argv[1])))" "$1"; }
 hex() { python3 -c "import secrets,sys; print(secrets.token_hex(int(sys.argv[1])))" "$1"; }
@@ -31,13 +35,29 @@ die() { echo "demo.sh: $*" >&2; exit 1; }
 
 # --- settings: the owner's .env on a server, local defaults otherwise -------
 load_settings() {
-  if [ -f .env ]; then
-    set -a; . ./.env; set +a
-    : "${DEMO_DOMAIN:?set DEMO_DOMAIN in deploy/demo/.env}"
-    : "${DEMO_ACME_EMAIL:?set DEMO_ACME_EMAIL in deploy/demo/.env}"
-    DEMO_TLS=${DEMO_TLS:-on}
-    DEMO_HTTP_BIND=${DEMO_HTTP_BIND:-80}
-    DEMO_HTTPS_BIND=${DEMO_HTTPS_BIND:-443}
+  DEMO_TUNNEL=${DEMO_TUNNEL:-off}
+  if [ -f "$ENV_FILE" ]; then
+    set -a
+    # shellcheck source=/dev/null
+    . "$ENV_FILE"
+    set +a
+    DEMO_TUNNEL=${DEMO_TUNNEL:-off}
+    : "${DEMO_DOMAIN:?set DEMO_DOMAIN in ${ENV_FILE}}"
+    if [ "$DEMO_TUNNEL" = on ]; then
+      # Cloudflare ends TLS and connects out to the proxy: no certificates
+      # here, and nothing published beyond this machine's loopback.
+      [ -n "${DEMO_TUNNEL_TOKEN:-}" ] || die "DEMO_TUNNEL=on needs DEMO_TUNNEL_TOKEN in ${ENV_FILE}"
+      [ "${DEMO_TLS:-off}" = off ] || die "DEMO_TUNNEL=on and DEMO_TLS=on are exclusive: Cloudflare serves the certificates"
+      DEMO_TLS=off
+      DEMO_ACME_EMAIL=${DEMO_ACME_EMAIL:-owner@example.com}
+      DEMO_HTTP_BIND=${DEMO_HTTP_BIND:-127.0.0.1:3930}
+      DEMO_HTTPS_BIND=${DEMO_HTTPS_BIND:-127.0.0.1:3931}
+    else
+      : "${DEMO_ACME_EMAIL:?set DEMO_ACME_EMAIL in ${ENV_FILE}}"
+      DEMO_TLS=${DEMO_TLS:-on}
+      DEMO_HTTP_BIND=${DEMO_HTTP_BIND:-80}
+      DEMO_HTTPS_BIND=${DEMO_HTTPS_BIND:-443}
+    fi
   else
     DEMO_DOMAIN=${DEMO_DOMAIN:-demo.localhost}
     DEMO_ACME_EMAIL=${DEMO_ACME_EMAIL:-owner@example.com}
@@ -61,14 +81,36 @@ load_settings() {
     *) die "DEMO_MODEL must be stand-in or gemini" ;;
   esac
   case "$DEMO_TLS" in on|off) ;; *) die "DEMO_TLS must be on or off" ;; esac
+  case "$DEMO_TUNNEL" in on|off) ;; *) die "DEMO_TUNNEL must be on or off" ;; esac
+  # The chat and bot hosts default to subdomains of the page's host. Name them
+  # explicitly when the certificate cannot cover a second level (Cloudflare's
+  # free certificate covers *.example.com, not *.demo.example.com).
+  DEMO_CHAT_HOST=${DEMO_CHAT_HOST:-chat.${DEMO_DOMAIN}}
+  DEMO_BOT_HOST=${DEMO_BOT_HOST:-bot.${DEMO_DOMAIN}}
   local scheme=http suffix=""
-  [ "$DEMO_TLS" = on ] && scheme=https
+  if [ "$DEMO_TLS" = on ] || [ "$DEMO_TUNNEL" = on ]; then scheme=https; fi
   # A local run publishes on a high port; the origins browsers use carry it.
-  if [ "$DEMO_TLS" = off ] && [ "${DEMO_HTTP_BIND##*:}" != 80 ]; then suffix=":${DEMO_HTTP_BIND##*:}"; fi
+  if [ "$scheme" = http ] && [ "${DEMO_HTTP_BIND##*:}" != 80 ]; then suffix=":${DEMO_HTTP_BIND##*:}"; fi
   PAGE_HOST="${DEMO_DOMAIN}${suffix}"
   PAGE_ORIGIN="${scheme}://${PAGE_HOST}"
-  CHAT_ORIGIN="${scheme}://chat.${DEMO_DOMAIN}${suffix}"
-  BOT_ORIGIN="${scheme}://bot.${DEMO_DOMAIN}${suffix}"
+  CHAT_ORIGIN="${scheme}://${DEMO_CHAT_HOST}${suffix}"
+  BOT_ORIGIN="${scheme}://${DEMO_BOT_HOST}${suffix}"
+  # Behind the tunnel every request reaches the proxy from cloudflared, so the
+  # visitor's address is the header Cloudflare sets, and the forwarded scheme
+  # (https) is trusted. Nothing else can reach the proxy: no port is published
+  # beyond loopback.
+  if [ "$DEMO_TUNNEL" = on ]; then
+    DEMO_CLIENT_IP_HEADER=Cf-Connecting-Ip
+    DEMO_TRUST_FORWARDED=true
+  else
+    DEMO_CLIENT_IP_HEADER=""
+    DEMO_TRUST_FORWARDED=false
+  fi
+  DEMO_PUBLIC_HTTPS=off
+  [ "$scheme" = https ] && DEMO_PUBLIC_HTTPS=on
+  COMPOSE=(docker compose -p "$PROJECT" -f compose.yaml --env-file .local/bundle.env)
+  [ "$DEMO_TUNNEL" = on ] && COMPOSE+=(--profile tunnel)
+  return 0
 }
 
 write_bundle_env() {
@@ -76,7 +118,12 @@ write_bundle_env() {
   umask 077
   cat > .local/bundle.env <<ENV
 DEMO_DOMAIN=${DEMO_DOMAIN}
+DEMO_CHAT_HOST=${DEMO_CHAT_HOST}
+DEMO_BOT_HOST=${DEMO_BOT_HOST}
 DEMO_TLS=${DEMO_TLS}
+DEMO_PUBLIC_HTTPS=${DEMO_PUBLIC_HTTPS}
+DEMO_CLIENT_IP_HEADER=${DEMO_CLIENT_IP_HEADER}
+DEMO_TRUST_FORWARDED=${DEMO_TRUST_FORWARDED}
 DEMO_ACME_EMAIL=${DEMO_ACME_EMAIL}
 DEMO_HTTP_BIND=${DEMO_HTTP_BIND}
 DEMO_HTTPS_BIND=${DEMO_HTTPS_BIND}
@@ -88,6 +135,8 @@ PAGE_ORIGIN=${PAGE_ORIGIN}
 CHAT_ORIGIN=${CHAT_ORIGIN}
 BOT_ORIGIN=${BOT_ORIGIN}
 ENV
+  # Written in every mode, empty without the tunnel, so the file compose reads exists.
+  printf 'TUNNEL_TOKEN=%s\n' "${DEMO_TUNNEL_TOKEN:-}" > .local/tunnel.env
 }
 
 write_secrets() {
@@ -223,7 +272,9 @@ case "${1:-help}" in
     "${COMPOSE[@]}" build inbox-core
     "${COMPOSE[@]}" up -d postgres redis
     "${COMPOSE[@]}" run --rm rails bundle exec rails db:chatwoot_prepare
-    "${COMPOSE[@]}" up -d rails sidekiq litellm page proxy
+    edge=(proxy)
+    [ "$DEMO_TUNNEL" = on ] && edge+=(tunnel)
+    "${COMPOSE[@]}" up -d rails sidekiq litellm page "${edge[@]}"
     wait_for "Chatwoot" 100 rails_up
     seed
     write_service_env
@@ -235,6 +286,17 @@ case "${1:-help}" in
     echo "Owner dashboard: ${CHAT_ORIGIN} (sign-in in deploy/demo/.local/people.env)"
     echo "Model:           ${DEMO_MODEL}, at most ${DEMO_DAILY_BUDGET_USD} US dollars a day"
     ;;
+  settings)
+    mode=local
+    [ "$DEMO_TLS" = on ] && mode=letsencrypt
+    [ "$DEMO_TUNNEL" = on ] && mode=tunnel
+    echo "mode:            ${mode}"
+    echo "page:            ${PAGE_ORIGIN}"
+    echo "chat:            ${CHAT_ORIGIN}"
+    echo "bot:             ${BOT_ORIGIN}"
+    echo "published ports: ${DEMO_HTTP_BIND} ${DEMO_HTTPS_BIND}"
+    echo "model:           ${DEMO_MODEL}"
+    ;;
   smoke)
     set -a; . .local/tokens.env; set +a
     python3 smoke.py --page "$PAGE_ORIGIN" --chat "$CHAT_ORIGIN" --bot "$BOT_ORIGIN" \
@@ -242,8 +304,9 @@ case "${1:-help}" in
     ;;
   status) "${COMPOSE[@]}" ps ;;
   memory)
+    mapfile -t containers < <("${COMPOSE[@]}" ps -q)
     docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' \
-      $("${COMPOSE[@]}" ps -q) | python3 -c '
+      "${containers[@]}" | python3 -c '
 import re, sys
 units = {"B": 1, "KiB": 2**10, "MiB": 2**20, "GiB": 2**30}
 total = 0
@@ -256,6 +319,7 @@ print("total".ljust(40), f"{total / 2**20:.0f}MiB")'
     ;;
   reset)
     days=${2:-1}
+    # shellcheck disable=SC2016 # expanded by the container's shell
     "${COMPOSE[@]}" exec -T -e DEMO_RESET_DAYS="$days" reset \
       sh -c '/app/.venv/bin/python -m inbox_core.chatwoot retention --days "$DEMO_RESET_DAYS"'
     ;;
@@ -265,5 +329,5 @@ print("total".ljust(40), f"{total / 2**20:.0f}MiB")'
     read -r -p "Delete the ${PROJECT} project's containers and volumes? [y/N] " answer
     [ "$answer" = "y" ] && "${COMPOSE[@]}" down -v
     ;;
-  *) sed -n '2,23p' "$0" ;;
+  *) sed -n '2,26p' "$(basename "$0")" ;;
 esac

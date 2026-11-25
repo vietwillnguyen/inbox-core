@@ -1,0 +1,5 @@
+#!/bin/sh
+# Echoes the request headers the upstream received.
+printf 'Content-Type: text/plain\r\n\r\n'
+printf 'proto=%s\n' "${HTTP_X_FORWARDED_PROTO:-}"
+printf 'host=%s\n' "${HTTP_HOST:-}"
