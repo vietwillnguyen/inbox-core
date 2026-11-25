@@ -127,11 +127,10 @@ Built-ins:
   `Template.from_config` reads a `[templates.<name>]` table from the client config.
 - `HandOff()` always hands off; it is the registry's default for any category without a handler.
 
-### Sources: tracked for staff, not shown to the public
+### Sources: tracked for staff, linked for the public only on request
 
 A reply's sources travel beside its text, never in it.
-On every channel and in every delivery mode, the text sent to the public, or held as a draft for a person to approve, has no source ids, titles or "Source:" line.
-So an approved draft cannot carry one into the sent message either, unless the person reviewing it types one.
+On every channel and in every delivery mode, the text sent to the public, or held as a draft for a person to approve, never has a source id or title.
 The sources are kept for staff in three places:
 
 - the audit record's `sources` (ids), for every answered or held reply;
@@ -141,11 +140,31 @@ The sources are kept for staff in three places:
 The `answered` note is best effort and comes after the answer: a failure is logged by exception type, recorded as `source_note` in `handoff_failures`, and the answer stands.
 Nothing labels, assigns or opens an answered conversation.
 
-A client that wants the public to see the sources sets `show_sources = true` in `[delivery]` (off by default); the pipeline then adds "Source: <id> <title>; ..." to the reply text, and the staff records are unchanged.
+A knowledge entry may name the public page it is about, in a `URL:` line (see below) or `KnowledgeEntry(url=...)`.
+The URL must be an absolute `https` URL with a host and no user name or password; anything else is refused when the knowledge is loaded, so a service with a bad URL does not start.
+A client that wants the public to see where an answer comes from sets `show_sources = true` in `[delivery]` (off by default, per client).
+The pipeline then ends a grounded reply with one line linking to the public pages of the sources it used, for example:
+
+```text
+The library is open on Wednesdays from 5pm to 8pm and on Saturdays from 10am to 2pm.
+
+More: https://brambleford-tools.example/visit
+```
+
+Only sources with a URL are linked, each page once, in the order the sources came, separated by ", ".
+Sources without a URL are never mentioned, and a reply whose sources have none gets no line at all.
+An id or title is never shown, in any mode.
+The words before the links are `More:` unless the client sets `[delivery.links_label]`, a table of language = label (one line, at most 40 characters), with the default language's label as the fallback.
+The staff records are the same with the option on or off.
+
+The line is added before delivery decides to send or hold, so it is the same rule for both paths.
+A held draft's text therefore already ends with the line, and the reviewer sees exactly what will be sent and may edit or remove it; an approved draft is sent as the person approved it, with nothing appended after approval.
+With the option off, a held draft has no line and approving it adds none.
+Turning the option on or off affects replies written after the change; a draft already held keeps the text it was held with.
 The groundedness evaluation judges the handler's text against the knowledge entries named in its `sources`, so it does not depend on the text naming them.
 
 `InMemoryRetriever` is BM25 over titles, keywords and text, with no embeddings and no network, for tests, demos and small knowledge bases.
-`load_markdown_knowledge` reads `## <id> <title>` sections, each optionally starting with a `Keywords:` line, which is how an English entry can be found by a question in another language.
+`load_markdown_knowledge` reads `## <id> <title>` sections, each optionally starting with a `Keywords:` line, which is how an English entry can be found by a question in another language, and a `URL:` line naming the entry's public page, in either order.
 `ExtractiveGenerator` returns the best passage verbatim; `adapters.litellm.LiteLLMGenerator` asks a model, under instructions rendered from the client config.
 
 ### How future handlers fit without changing the protocol

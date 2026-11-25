@@ -507,3 +507,27 @@ def test_signer_rejects_a_short_secret() -> None:
     with pytest.raises(ValueError, match="32"):
         TabSigner("short")
     assert TAB_SECRET  # the fixture's secret is long enough
+
+
+class TestPublicLinks:
+    """With ``delivery.show_sources`` on, the reviewer sees the link line and sends it."""
+
+    def test_the_draft_carries_the_link_line_and_sending_delivers_it(self, tmp_path: Any) -> None:
+        from tests.chatwoot.conftest import build_stack, showing_sources
+
+        stack = build_stack(
+            tmp_path, mode="draft", env={"INBOX_CORE_CONFIG": str(showing_sources(tmp_path))}
+        )
+        try:
+            held(stack)
+            session = session_of(stack)
+            draft = first_draft(stack, session)
+            assert draft["text"].endswith("\n\nMore: https://brambleford-tools.example/visit")
+            assert "TL-01" not in draft["text"]
+            assert "Opening hours" not in draft["text"]
+            # Staff still see the id and title beside the draft.
+            assert draft["sources"] == [{"id": "TL-01", "title": "Opening hours"}]
+            assert send(stack, session, draft).status_code == 200
+            assert stack.chatwoot.public_messages(20) == [draft["text"]]
+        finally:
+            stack.parts.store.close()

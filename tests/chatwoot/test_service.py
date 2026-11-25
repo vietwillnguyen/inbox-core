@@ -15,6 +15,7 @@ from tests.chatwoot.conftest import (
     Stack,
     build_stack,
     message_payload,
+    showing_sources,
 )
 
 QUESTION = "What are your opening hours?"
@@ -30,6 +31,55 @@ def metrics(stack: Stack) -> dict[str, object]:
     assert response.status_code == 200
     data: dict[str, object] = response.json()
     return data
+
+
+class TestPublicLinks:
+    """``delivery.show_sources``: a link to the public page, never an id or title."""
+
+    def test_off_the_visitor_sees_the_answer_alone(self, stack: Stack) -> None:
+        stack.visitor_says(10, 200, QUESTION)
+        (reply,) = stack.chatwoot.public_messages(10)
+        assert "https://" not in reply
+        assert "More:" not in reply
+
+    def test_on_the_visitor_sees_the_public_link_and_staff_keep_the_source(
+        self, tmp_path: Path
+    ) -> None:
+        stack = build_stack(tmp_path, env={"INBOX_CORE_CONFIG": str(showing_sources(tmp_path))})
+        try:
+            stack.visitor_says(10, 200, QUESTION)
+            (reply,) = stack.chatwoot.public_messages(10)
+            assert reply.startswith("The library is open on Wednesdays")
+            assert reply.endswith("\n\nMore: https://brambleford-tools.example/visit")
+            assert "TL-01" not in reply
+            assert "Opening hours" not in reply
+            assert stack.chatwoot.notes(10) == [
+                "inbox-core answered this message automatically.\n"
+                "Category: faq. Tier: auto_answer.\n"
+                "Sources: TL-01 Opening hours."
+            ]
+            assert stack.audit.records[-1].sources == ("TL-01",)
+        finally:
+            stack.parts.store.close()
+
+    def test_on_an_answer_from_an_entry_without_a_page_has_no_line(self, tmp_path: Path) -> None:
+        stack = build_stack(tmp_path, env={"INBOX_CORE_CONFIG": str(showing_sources(tmp_path))})
+        try:
+            stack.visitor_says(10, 200, "How long can I keep a tool?")
+            (reply,) = stack.chatwoot.public_messages(10)
+            assert stack.audit.records[-1].sources == ("TL-07",)
+            assert "More:" not in reply
+            assert "https://" not in reply
+        finally:
+            stack.parts.store.close()
+
+    def test_a_knowledge_file_with_a_bad_url_stops_the_service_starting(
+        self, tmp_path: Path
+    ) -> None:
+        knowledge = tmp_path / "knowledge.md"
+        knowledge.write_text("## KB-1 Opening hours\nURL: http://shop.example/hours\nNine.\n")
+        with pytest.raises(ValueError, match=r"KB-1.*absolute https URL"):
+            build_stack(tmp_path, env={"INBOX_CORE_KNOWLEDGE": str(knowledge)})
 
 
 class TestAnswering:

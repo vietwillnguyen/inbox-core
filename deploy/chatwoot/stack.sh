@@ -7,6 +7,7 @@
 #
 #   up                 write local secrets if missing, start everything, seed, wait
 #   mode off|draft|auto   restart the service in that delivery mode
+#   sources on|off     restart the service with delivery.show_sources on or off
 #   stop-service       stop only the inbox-core service (to see Chatwoot's fallback)
 #   start-service      start it again
 #   retention DAYS     delete Chatwoot transcripts and core content older than DAYS
@@ -72,9 +73,18 @@ INBOX_CORE_ENCRYPTION_KEYS=k1:$(python3 -c "import base64,secrets; print(base64.
 ENV
   fi
   [ -f .local/mode ] || echo "${INBOX_CORE_MODE:-auto}" > .local/mode
+  [ -f .local/sources ] || echo off > .local/sources
+  write_client_config
+}
+
+write_client_config() {
   # The worked example's configuration, with its daily cap of 40 automatic
-  # sends raised so the end-to-end suite can run many times in one day.
+  # sends raised so the end-to-end suite can run many times in one day, and
+  # delivery.show_sources set from .local/sources (off unless turned on).
+  local show=false
+  [ "$(cat .local/sources)" = on ] && show=true
   sed -e 's/^daily_send_cap = .*/daily_send_cap = 1000/' \
+    -e "s/^\\[delivery\\]\$/[delivery]\\nshow_sources = ${show}/" \
     ../../src/inbox_core/examples/tool_library/client.toml > .local/client.toml
   # Not a secret, and the service runs as its own user: readable by all.
   chmod 644 .local/client.toml
@@ -149,6 +159,13 @@ case "${1:-help}" in
     write_service_env
     "${COMPOSE[@]}" up -d --build --force-recreate inbox-core
     wait_for "${SERVICE_ORIGIN}/healthz" "inbox-core in $2 mode" 60
+    ;;
+  sources)
+    case "${2:-}" in on|off) ;; *) echo "usage: $0 sources on|off" >&2; exit 2;; esac
+    echo "$2" > .local/sources
+    write_client_config
+    "${COMPOSE[@]}" up -d --build --force-recreate inbox-core
+    wait_for "${SERVICE_ORIGIN}/healthz" "inbox-core with sources $2" 60
     ;;
   stop-service) "${COMPOSE[@]}" stop inbox-core ;;
   start-service)
