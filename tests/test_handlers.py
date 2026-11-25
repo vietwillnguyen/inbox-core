@@ -229,6 +229,25 @@ class TestGroundedAnswer:
         with pytest.raises(TypeError):
             grounded(cite=True)
 
+    def test_a_source_carries_its_entry_public_url(self) -> None:
+        linked = KnowledgeEntry(
+            "KB-09",
+            "Returns",
+            "Returns are free within 30 days.",
+            url="https://bikes.example/returns",
+        )
+        result = GroundedAnswer(
+            InMemoryRetriever((linked,)), ExtractiveGenerator(), min_score=0.1, limit=1
+        ).handle(request("returns"))
+        assert result.sources == (
+            Source("KB-09", "Returns", result.sources[0].score, "https://bikes.example/returns"),
+        )
+        assert "https://" not in result.text
+
+    def test_a_source_without_a_public_url_has_none(self) -> None:
+        result = grounded().handle(request("opening hours on Saturday"))
+        assert [s.url for s in result.sources] == [None]
+
     def test_spanish_keywords_find_an_english_entry(self) -> None:
         result = grounded().handle(request("Tengo un pinchazo en la rueda", language="es"))
         assert [source.id for source in result.sources] == ["KB-02"]
@@ -294,6 +313,52 @@ class TestMarkdownKnowledge:
             KnowledgeEntry("KB-02", "Location", "Next to the ferry."),
         )
         assert "Open 9" not in repr(entries[0])
+
+    def test_an_entry_may_name_its_public_page(self, tmp_path: Path) -> None:
+        path = tmp_path / "kb.md"
+        path.write_text(
+            "## KB-01 Opening hours\nKeywords: horario\nURL: https://bikes.example/hours\n"
+            "Open 9 to 6.\n\n"
+            "## KB-02 Location\nurl:  https://bikes.example/find-us?from=kb#map \n"
+            "Keywords: ferry\nNext to the ferry.\n\n"
+            "## KB-03 Repairs\nWe fix bikes.\n",
+            encoding="utf-8",
+        )
+        entries = load_markdown_knowledge(path)
+        assert [(e.id, e.url, e.keywords, e.text) for e in entries] == [
+            ("KB-01", "https://bikes.example/hours", ("horario",), "Open 9 to 6."),
+            (
+                "KB-02",
+                "https://bikes.example/find-us?from=kb#map",
+                ("ferry",),
+                "Next to the ferry.",
+            ),
+            ("KB-03", None, (), "We fix bikes."),
+        ]
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://bikes.example/hours",
+            "/hours",
+            "bikes.example/hours",
+            "https://",
+            "https:///hours",
+            "ftp://bikes.example/hours",
+            "javascript:alert(1)",
+            "https://user:secret@bikes.example/hours",
+            "https://bikes example/hours",
+            "https://bikes.example/" + "a" * 2100,
+            "",
+        ],
+    )
+    def test_a_public_url_must_be_an_absolute_https_url(self, tmp_path: Path, url: str) -> None:
+        path = tmp_path / "kb.md"
+        path.write_text(f"## KB-01 Opening hours\nURL: {url}\nOpen 9 to 6.\n", encoding="utf-8")
+        with pytest.raises(ValueError, match=r"KB-01.*absolute https URL"):
+            load_markdown_knowledge(path)
+        with pytest.raises(ValueError, match="absolute https URL"):
+            KnowledgeEntry("KB-01", "Opening hours", "Open 9 to 6.", url=url)
 
     @pytest.mark.parametrize(
         ("body", "problem"),

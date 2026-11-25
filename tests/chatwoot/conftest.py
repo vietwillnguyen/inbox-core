@@ -125,6 +125,17 @@ def message_payload(
     }
 
 
+def showing_sources(tmp_path: Path) -> Path:
+    """The worked example's configuration with ``delivery.show_sources`` turned on."""
+    from inbox_core.examples.demo import EXAMPLE_DIR
+
+    text = (EXAMPLE_DIR / "client.toml").read_text(encoding="utf-8")
+    assert "\n# show_sources = true\n" in text
+    path = tmp_path / "client-showing-sources.toml"
+    path.write_text(text.replace("\n# show_sources = true\n", "\nshow_sources = true\n", 1))
+    return path
+
+
 def build_stack(
     tmp_path: Path, *, mode: str = "auto", env: dict[str, str] | None = None, **changes: Any
 ) -> Stack:

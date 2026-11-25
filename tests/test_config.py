@@ -364,3 +364,32 @@ class TestShowSources:
         assert "delivery.show_sources must be true or false" in problems_of(
             lambda: ClientConfig.from_mapping(self.with_delivery({"show_sources": "yes"}))
         )
+
+    def test_the_links_line_label_defaults_to_more_and_may_be_set_by_language(self) -> None:
+        plain = ClientConfig.from_mapping(self.with_delivery({"show_sources": True}))
+        assert plain.links_label("en") == "More:"
+        assert plain.links_label("xx") == "More:"
+        labelled = ClientConfig.from_mapping(
+            self.with_delivery({"show_sources": True, "links_label": {"vi": "Xem thêm:"}})
+        )
+        assert labelled.links_label("vi") == "Xem thêm:"
+        assert labelled.links_label("en") == "More:"
+        default_set = ClientConfig.from_mapping(
+            self.with_delivery({"links_label": {"en": "Read more:"}})
+        )
+        assert default_set.links_label("vi") == "Read more:"
+
+    @pytest.mark.parametrize(
+        ("labels", "problem"),
+        [
+            ({"en": ""}, "delivery.links_label has an empty label for 'en'"),
+            ({"en": "More:\nhttps://x.example"}, "delivery.links_label for 'en' must be one line"),
+            ({"en": "x" * 41}, "delivery.links_label for 'en' must be at most 40 characters"),
+            ({"fr": "Plus :"}, "delivery.links_label has a label for unconfigured language 'fr'"),
+            ("More:", "delivery.links_label must be a table of language = label"),
+        ],
+    )
+    def test_a_bad_label_is_refused(self, labels: Any, problem: str) -> None:
+        assert problem in problems_of(
+            lambda: ClientConfig.from_mapping(self.with_delivery({"links_label": labels}))
+        )

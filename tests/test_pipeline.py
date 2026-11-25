@@ -20,6 +20,7 @@ from inbox_core.handlers import (
     HandlerRegistry,
     HandlerRequest,
     HandlerResult,
+    Source,
     Template,
 )
 from inbox_core.knowledge import InMemoryRetriever, KnowledgeEntry
@@ -115,6 +116,117 @@ def harness(
 QUESTION = "What are your opening hours on Saturday?"
 
 
+HOURS_URL = "https://bikes.example/hours"
+LINKED = (
+    dataclasses.replace(ENTRIES[0], url=HOURS_URL),
+    ENTRIES[1],
+)
+
+
+def linked_registry() -> HandlerRegistry:
+    return HandlerRegistry(
+        {"faq": GroundedAnswer(InMemoryRetriever(LINKED), ExtractiveGenerator(), min_score=0.5)}
+    )
+
+
+class Cites:
+    """A handler that answers with fixed text and the sources it is given."""
+
+    name = "cites"
+
+    def __init__(self, *sources: Source) -> None:
+        self.sources = sources
+
+    def handle(self, request: HandlerRequest) -> HandlerResult:
+        return HandlerResult.reply("grounded_answer", "Here is the answer.", sources=self.sources)
+
+
+def everything_sent_or_held(h: Harness) -> list[str]:
+    return [r.text for r in (*h.sink.sent, *h.sink.held)]
+
+
+class TestPublicLinks:
+    """``delivery.show_sources``: links to public pages, never ids or titles."""
+
+    def test_off_by_default_nothing_is_added_even_when_an_entry_has_a_url(self) -> None:
+        for mode in ("auto", "draft"):
+            h = harness(mode=mode, handlers=linked_registry())
+            h.pipeline.process(message(QUESTION))
+            assert everything_sent_or_held(h) == [ENTRIES[0].text]
+
+    def test_on_a_sent_answer_ends_with_its_public_link_only(self) -> None:
+        h = harness(client=config(show_sources=True), handlers=linked_registry())
+        record = h.pipeline.process(message(QUESTION))
+        (sent,) = h.sink.sent
+        assert sent.text == f"{ENTRIES[0].text}\n\nMore: {HOURS_URL}"
+        assert "KB-01" not in sent.text
+        assert "Opening hours" not in sent.text
+        assert "Source" not in sent.text
+        # Staff tracking is unchanged: the audit keeps the id.
+        assert record.sources == ("KB-01",)
+
+    def test_on_without_a_url_nothing_is_added(self) -> None:
+        h = harness(client=config(show_sources=True))
+        h.pipeline.process(message(QUESTION))
+        assert [r.text for r in h.sink.sent] == [ENTRIES[0].text]
+
+    def test_only_sources_with_a_url_are_linked_once_each_in_order(self) -> None:
+        handler = Cites(
+            Source("KB-01", "Opening hours", 2.0, HOURS_URL),
+            Source("KB-02", "Location", 1.5),
+            Source("KB-03", "Holiday hours", 1.2, HOURS_URL),
+            Source("KB-04", "Finding us", 1.0, "https://bikes.example/find-us"),
+        )
+        h = harness(client=config(show_sources=True), handlers=HandlerRegistry({"faq": handler}))
+        h.pipeline.process(message(QUESTION))
+        (sent,) = h.sink.sent
+        assert sent.text == (
+            f"Here is the answer.\n\nMore: {HOURS_URL}, https://bikes.example/find-us"
+        )
+        for hidden in ("KB-0", "Opening hours", "Location", "Holiday hours", "Finding us"):
+            assert hidden not in sent.text
+
+    def test_a_reply_without_sources_gets_no_line(self) -> None:
+        h = harness(
+            client=config(show_sources=True),
+            classifier=FakeClassifier(default=signals("refund")),
+        )
+        h.pipeline.process(message("I want my money back"))
+        assert [r.text for r in h.sink.sent] == [HOLDING]
+
+    def test_the_label_follows_the_reply_language(self) -> None:
+        h = harness(
+            client=config(show_sources=True, links_label={"es": "Más información:"}),
+            handlers=linked_registry(),
+            classifier=FakeClassifier(default=signals("faq", language="es")),
+        )
+        h.pipeline.process(message("Cual es el horario de apertura? opening hours"))
+        (held,) = h.sink.held
+        assert held.text.endswith(f"\n\nMás información: {HOURS_URL}")
+
+    def test_a_held_draft_shows_the_reviewer_the_line_and_approval_sends_what_they_saw(
+        self,
+    ) -> None:
+        h = harness(
+            mode="draft", client=config("draft", show_sources=True), handlers=linked_registry()
+        )
+        h.pipeline.process(message(QUESTION))
+        (draft,) = h.pipeline.drafts.pending(1)
+        expected = f"{ENTRIES[0].text}\n\nMore: {HOURS_URL}"
+        assert draft.text == expected
+        assert [r.text for r in h.sink.held] == [expected]
+        h.pipeline.drafts.send(draft.id, reviewer="chatwoot-user:5")
+        assert [r.text for r in h.sink.sent] == [expected]
+
+    def test_an_approved_draft_with_the_option_off_has_no_line(self) -> None:
+        h = harness(mode="draft", handlers=linked_registry())
+        h.pipeline.process(message(QUESTION))
+        (draft,) = h.pipeline.drafts.pending(1)
+        assert draft.text == ENTRIES[0].text
+        h.pipeline.drafts.send(draft.id, reviewer="chatwoot-user:5")
+        assert [r.text for r in h.sink.sent] == [ENTRIES[0].text]
+
+
 class TestAnswering:
     def test_auto_mode_sends_a_grounded_answer_with_its_sources(self) -> None:
         h = harness()
@@ -145,21 +257,6 @@ class TestAnswering:
             ("KB-01",),
             ("KB-01",),
         ]
-
-    def test_a_client_that_opts_in_shows_its_sources_in_the_reply(self) -> None:
-        h = harness(client=config(show_sources=True))
-        h.pipeline.process(message(QUESTION))
-        assert [r.text for r in h.sink.sent] == [
-            f"{ENTRIES[0].text}\n\nSource: KB-01 Opening hours"
-        ]
-
-    def test_a_reply_without_sources_gets_no_source_line_even_when_opted_in(self) -> None:
-        h = harness(
-            client=config(show_sources=True),
-            classifier=FakeClassifier(default=signals("refund")),
-        )
-        h.pipeline.process(message("I want my money back"))
-        assert [r.text for r in h.sink.sent] == [HOLDING]
 
     def test_draft_mode_holds_and_never_sends(self) -> None:
         h = harness(mode="draft")

@@ -11,8 +11,8 @@ Three built-ins:
 - :class:`GroundedAnswer` answers from retrieved knowledge entries and returns
   the sources it used, refusing when nothing scores above its threshold. The
   sources travel beside the text, never in it: the pipeline keeps them for
-  staff and adds them to what the public sees only when the client opts in
-  (``delivery.show_sources``).
+  staff, and when the client opts in (``delivery.show_sources``) adds a line
+  linking to the public pages of the ones that have one, never an id or title.
 - :class:`Template` returns fixed text the client wrote, chosen by language.
 - :class:`HandOff` always hands off.
 
@@ -61,11 +61,17 @@ _TAG = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,63}$")
 
 @dataclass(frozen=True)
 class Source:
-    """A knowledge entry a reply was grounded in, recorded by id and title."""
+    """A knowledge entry a reply was grounded in, recorded by id and title.
+
+    ``url`` is the entry's public page, when it has one. The id and title are
+    for staff; the url is the only part the public may be shown, and only
+    when the client sets ``delivery.show_sources``.
+    """
 
     id: str
     title: str
     score: float
+    url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -316,7 +322,7 @@ class GroundedAnswer:
         if not text or REFUSAL_SENTINEL in text:
             return HandlerResult.hand_off(self.name, "the generator found the context insufficient")
 
-        sources = tuple(Source(p.entry.id, p.entry.title, p.score) for p in passages)
+        sources = tuple(Source(p.entry.id, p.entry.title, p.score, p.entry.url) for p in passages)
         return HandlerResult.reply(self.name, text, sources=sources)
 
 
