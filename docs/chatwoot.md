@@ -77,7 +77,9 @@ Do not put a proxy in front of it that can answer 500 or 429 on its behalf.
 - Everything else is ignored and counted: the bot's own messages, private notes, activity and template messages, `message_updated`, status changes and `webwidget_triggered`.
 
 Every conversation the service processes gets the label `inbox-core`.
-An answer the bot sends is the answer alone: the visitor never sees a source id, title or "Source:" line.
+An answer the bot sends is the answer alone: the visitor never sees a source id or title.
+With `delivery.show_sources = true` it ends with one line linking to the public pages of its sources that have one, such as `More: https://brambleford-tools.example/visit`, which the widget shows as a link (`19`); see "Sources" in [design.md](design.md).
+`./deploy/chatwoot/stack.sh sources on|off` restarts the local service with the option on or off (off by default).
 Right after it, the bot adds a private note (Chatwoot's `private: true` message, which the widget never shows) naming the knowledge entries the answer was based on, for example `Sources: TL-01 Opening hours.`, so a person reading the conversation later sees what it was based on.
 A failed note is logged, recorded as `source_note` in the audit record's `handoff_failures`, and does not undo the answer.
 
@@ -90,7 +92,8 @@ Processing of one conversation is serialised by a lease in the core store, so tw
 
 The seed registers a Dashboard App called `inbox-core drafts`, which Chatwoot shows as a tab beside Messages in every conversation.
 It lists the conversation's held drafts with their sources, category, tier, confidence and why they were held, lets the agent edit the text, and has Send and Discard.
-The sources are shown beside the draft, not in its text, so what the agent sends has none.
+The sources are shown beside the draft, not in its text, so what the agent sends never names them.
+With `delivery.show_sources = true` the draft's text already ends with the public link line, so the agent sees, and may edit, exactly what will be sent.
 
 Chatwoot posts the conversation and the "current agent" to the frame unsigned and to any origin (`app/javascript/dashboard/components/widgets/DashboardApp/Frame.vue`), so the tab never trusts that identity.
 Instead:
@@ -157,8 +160,8 @@ uv run pytest -m e2e tests/e2e
 ```
 
 It is marked `e2e`, which the default run deselects, and it skips itself if the stack is not up.
-It switches the service's mode as it goes and leaves it in `auto`; it takes about four minutes.
-It covers: an answer in the widget with no source in it, and its sources in a private note the widget does not show; a hand-off with its holding message, labels, note and assignment; a person replying silencing the bot; draft mode holding a reply and nothing reaching the visitor; a draft sent as written, sent edited, and discarded from the tab; the hostile cases (no session, a session signed with another secret, the bot's token trying to sign in, a replayed send, another conversation's draft with this conversation's token, an expired session signed with the real secret, a draft already sent, cross-origin requests and the framing policy, and an agent removed from the inbox); the service-down fallback and that neither a hand-off nor an agent taking over triggers it; the retention job in Chatwoot and the core; and the log proof above.
+It switches the service's mode and `show_sources` as it goes and leaves them in `auto` and off; it takes about four minutes.
+It covers: an answer in the widget with no source in it, and its sources in a private note the widget does not show; with `show_sources` on, an answer ending with its public link and no id or title, an answer from an entry without a page with no line, and an approved draft reaching the widget with the line the reviewer saw; a hand-off with its holding message, labels, note and assignment; a person replying silencing the bot; draft mode holding a reply and nothing reaching the visitor; a draft sent as written, sent edited, and discarded from the tab; the hostile cases (no session, a session signed with another secret, the bot's token trying to sign in, a replayed send, another conversation's draft with this conversation's token, an expired session signed with the real secret, a draft already sent, cross-origin requests and the framing policy, and an agent removed from the inbox); the service-down fallback and that neither a hand-off nor an agent taking over triggers it; the retention job in Chatwoot and the core; and the log proof above.
 
 ## Evidence
 
@@ -175,6 +178,7 @@ Screenshots from the running stack, in [`docs/evidence/chatwoot/`](evidence/chat
 | `15`, `16` | The tab refusing to be framed by another origin, and opened outside Chatwoot |
 | `17` | The service stopped: Chatwoot's fallback rule tells the visitor, once |
 | `18` | The same kind of answer in the agent dashboard, followed by the private note naming its source |
+| `19` | With `show_sources` on: the answer in the widget ending with a link to its public page, and no id or title |
 
 ## Regenerating code
 
