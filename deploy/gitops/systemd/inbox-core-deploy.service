@@ -1,0 +1,15 @@
+[Unit]
+Description=inbox-core demo: deploy the newest release tag, gated on the smoke test
+Documentation=https://github.com/vietwillnguyen/inbox-core/blob/main/docs/aws.md
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Every line goes to the journal (journalctl -u inbox-core-deploy); the outcome
+# also goes to /var/lib/inbox-core-deploy/status and history.log.
+ExecStart=/usr/local/sbin/inbox-core-deploy run
+# The first bring-up pulls and builds images: give it time.
+TimeoutStartSec=90min
+Nice=5

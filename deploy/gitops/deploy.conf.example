@@ -1,0 +1,24 @@
+# The deploy agent's configuration: /etc/inbox-core/deploy.conf on the host.
+# deploy/gitops/bootstrap.sh writes it from its options; this file documents
+# every setting. Not secret: no value here is a credential.
+
+# The clone the agent checks tags out in, and the remote it fetches tags from.
+CHECKOUT_DIR=/opt/inbox-core
+REMOTE=origin
+# Release tags the agent deploys, as a git glob. Newest first by version order.
+TAG_PATTERN='demo-v*'
+# The tag a fresh host starts at, before any newer tag is deployed. Empty: the newest.
+INITIAL_TAG=
+# The bundle's settings (deploy/demo/.env.example's names), without the secrets.
+SETTINGS_FILE=/etc/inbox-core/demo.settings
+# The secrets, as KEY=value lines: printed by a command (one that reads a cloud
+# secret store), or read from a root-only file. The command wins when both are set.
+SECRETS_COMMAND=
+SECRETS_FILE=/etc/inbox-core/secrets.env
+# Settings plus secrets, written mode 600 before every deploy; demo.sh reads it.
+ENV_FILE=/etc/inbox-core/demo.env
+# Where the current tag, the failed tags, the status and the history are kept.
+STATE_DIR=/var/lib/inbox-core-deploy
+# The smoke test is the gate; a fresh stack can need a moment behind a tunnel.
+SMOKE_ATTEMPTS=3
+SMOKE_RETRY_SECONDS=30
