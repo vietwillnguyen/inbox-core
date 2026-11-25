@@ -1,0 +1,7 @@
+# Copy to backend.hcl (gitignored), with the bucket deploy/aws/state-bucket made
+# (its backend_hcl output prints this file), then: terraform init -backend-config=backend.hcl
+bucket       = "inbox-core-tfstate-123456789012-us-east-1"
+key          = "inbox-core/demo/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true

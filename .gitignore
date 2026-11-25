@@ -25,3 +25,20 @@ htmlcov/
 
 # Evaluation output that has not been reviewed for publishing
 eval-runs/
+
+# Terraform: never commit state, plans, provider caches or real variable values
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+backend.hcl
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
