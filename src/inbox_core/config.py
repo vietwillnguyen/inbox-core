@@ -289,6 +289,11 @@ class DeliveryPolicy:
     ``approval_categories`` lists auto-answered categories whose replies are
     always held for a person to approve, whatever the mode: the assistant
     drafts, a person sends.
+    ``show_sources`` adds a "Source:" line naming the knowledge entries a
+    reply was written from to the text the public sees. It is off by default:
+    the sources are always kept for staff (the audit record, the draft tab and
+    a channel's staff note), and a client turns this on only to show them to
+    the public as well.
     """
 
     mode: DeliveryMode = DeliveryMode.OFF
@@ -299,10 +304,14 @@ class DeliveryPolicy:
     max_bot_replies_per_conversation: int = 1
     timezone: str = "UTC"
     holding: Mapping[str, str] = field(default_factory=dict)
+    show_sources: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "holding", MappingProxyType(dict(self.holding)))
         problems = []
+        show_sources: object = self.show_sources
+        if not isinstance(show_sources, bool):
+            problems.append("delivery.show_sources must be true or false")
         mode: object = self.mode
         auto_languages: object = self.auto_languages
         if not isinstance(mode, DeliveryMode):
@@ -466,6 +475,7 @@ class _Reader:
             "timezone",
             "holding",
             "approval_categories",
+            "show_sources",
         )
         table = self.table(data, "delivery", allowed)
         if table is None:

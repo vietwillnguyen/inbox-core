@@ -33,12 +33,21 @@ def metrics(stack: Stack) -> dict[str, object]:
 
 
 class TestAnswering:
-    def test_a_visitor_question_is_answered_with_its_source(self, stack: Stack) -> None:
+    def test_a_visitor_question_is_answered_and_its_source_kept_for_staff(
+        self, stack: Stack
+    ) -> None:
         response = stack.visitor_says(10, 200, QUESTION)
         assert response.status_code == 200
         assert response.json() == {"status": "accepted"}
         (reply,) = stack.chatwoot.public_messages(10)
-        assert "Source: TL-01 Opening hours" in reply
+        assert reply.startswith("The library is open on Wednesdays")
+        assert "Source" not in reply
+        assert "TL-01" not in reply
+        assert stack.chatwoot.notes(10) == [
+            "inbox-core answered this message automatically.\n"
+            "Category: faq. Tier: auto_answer.\n"
+            "Sources: TL-01 Opening hours."
+        ]
         (record,) = stack.audit.records
         assert (record.channel, record.thread_key, record.message_id) == ("chatwoot", "10", "200")
         assert record.decision == "answered"

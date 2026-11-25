@@ -257,7 +257,7 @@ def build_pipeline(
     """The example's pipeline: grounded answers for ``faq``, the template for ``membership``."""
     client = config or example_config()
     # The extractive stand-in uses only the best passage, so it is given only
-    # that one: the sources a reply cites must be the ones it was written from.
+    # that one: the sources recorded for a reply must be the ones it was written from.
     handlers = HandlerRegistry(
         {
             "faq": GroundedAnswer(
@@ -265,7 +265,6 @@ def build_pipeline(
                 generator or ExtractiveGenerator(),
                 min_score=MIN_SCORE,
                 limit=3 if generator is not None else 1,
-                cite=True,
             ),
             "membership": Template.from_config(client, "membership"),
         }

@@ -346,3 +346,21 @@ class TestTemplates:
         assert problem in problems_of(
             lambda: ClientConfig.from_mapping(self.with_templates(templates))
         )
+
+
+class TestShowSources:
+    def with_delivery(self, delivery: Any) -> dict[str, Any]:
+        data = tomllib.loads(ORIGIN.read_text(encoding="utf-8"))
+        data["delivery"] = delivery
+        return data
+
+    def test_sources_are_kept_out_of_replies_unless_a_client_opts_in(self) -> None:
+        assert load_config(ORIGIN).delivery.show_sources is False
+        assert ClientConfig.from_mapping(self.with_delivery({})).delivery.show_sources is False
+        opted_in = ClientConfig.from_mapping(self.with_delivery({"show_sources": True}))
+        assert opted_in.delivery.show_sources is True
+
+    def test_a_non_boolean_is_refused(self) -> None:
+        assert "delivery.show_sources must be true or false" in problems_of(
+            lambda: ClientConfig.from_mapping(self.with_delivery({"show_sources": "yes"}))
+        )

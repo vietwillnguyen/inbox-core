@@ -16,9 +16,18 @@ order, after any holding message and before the notifier:
    message or a draft that was already delivered.
 
 Everything a :class:`HandOffRequest` carries is built by the core from fixed
-phrases, category and tier names, knowledge entry ids and numbers. It holds no
-message content, so a channel may post the note where staff can see it without
-the note becoming a second copy of what the visitor wrote.
+phrases, category and tier names, knowledge entry ids and the titles the
+client gave those entries, and numbers. It holds no message content, so a
+channel may post the note where staff can see it without the note becoming a
+second copy of what the visitor wrote.
+
+After an answer is sent automatically, the pipeline also posts one
+``add_internal_note`` (purpose ``answered``) naming the knowledge entries the
+answer was written from, so a person reading the conversation later sees what
+it was based on; the public never sees the note, and the reply itself does not
+name its sources. Nothing labels, assigns or opens an answered conversation. A
+failed note is recorded as ``source_note`` in ``handoff_failures`` and does not
+undo the answer.
 
 A channel without a shared inbox (a mailbox read by one person) passes nothing
 and gets :class:`NoHandOffActions`.
@@ -27,6 +36,7 @@ and gets :class:`NoHandOffActions`.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal, Protocol, runtime_checkable
 
@@ -43,8 +53,9 @@ __all__ = [
     "handoff_note",
 ]
 
-HandOffPurpose = Literal["hand_off", "review"]
-"""Why a person is being brought in: the message is theirs, or a draft awaits review."""
+HandOffPurpose = Literal["hand_off", "review", "answered"]
+"""Why the inbox is told: the message is a person's, a draft awaits review, or
+an answer was sent (``answered`` posts only the staff note of its sources)."""
 
 HANDOFF_STEPS = ("add_internal_note", "add_labels", "assign", "open_for_person")
 """The order the pipeline calls the steps in."""
@@ -58,7 +69,7 @@ _LABEL = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 @dataclass(frozen=True)
 class HandOffRequest:
-    """One hand-off or review, as the channel's inbox needs to act on it.
+    """One hand-off, review or sent answer, as the channel's inbox needs to act on it.
 
     ``thread_key`` is the channel's conversation reference, ``conversation_id``
     the core store's. ``labels`` are lower-case identifiers. ``note`` is the
@@ -78,8 +89,8 @@ class HandOffRequest:
     note: str = field(repr=False)
 
     def __post_init__(self) -> None:
-        if self.purpose not in ("hand_off", "review"):
-            raise ValueError("purpose must be 'hand_off' or 'review'")
+        if self.purpose not in ("hand_off", "review", "answered"):
+            raise ValueError("purpose must be 'hand_off', 'review' or 'answered'")
         for label in self.labels:
             if not _LABEL.match(label):
                 raise ValueError("every label must be a lower-case identifier")
@@ -146,20 +157,32 @@ def handoff_note(
     tier: str,
     reason: str,
     sources: tuple[str, ...],
+    titles: Mapping[str, str] | None = None,
 ) -> str:
-    """The staff-only note, built from fixed phrases and identifiers only.
+    """The staff-only note, built from fixed phrases, identifiers and entry titles.
 
     ``reason`` is the pipeline's own reason (a fixed phrase, category names and
     numbers, never message text), so the note can be posted as it is.
+    ``titles`` maps a source id to its knowledge entry's title, for the
+    "Sources:" line of a review or an answer.
     """
+    named = "; ".join(f"{source} {(titles or {}).get(source, '')}".strip() for source in sources)
+    if purpose == "answered":
+        lines = [
+            "inbox-core answered this message automatically.",
+            f"Category: {category}. Tier: {tier}.",
+        ]
+        if named:
+            lines.append(f"Sources: {named}.")
+        return "\n".join(lines)
     if purpose == "review":
         lines = [
             "inbox-core drafted a reply and is holding it for review in the draft tab.",
             f"Category: {category}. Tier: {tier}.",
             f"Held because: {reason}.",
         ]
-        if sources:
-            lines.append(f"Sources: {', '.join(sources)}.")
+        if named:
+            lines.append(f"Sources: {named}.")
         return "\n".join(lines)
     return "\n".join(
         [

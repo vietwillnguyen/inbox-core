@@ -139,8 +139,7 @@ class Visitor:
     def say(self, text: str) -> None:
         self.post(text).raise_for_status()
 
-    def replies(self) -> list[str]:
-        """What the visitor sees from the shop: outgoing, public messages."""
+    def _messages(self) -> list[dict[str, Any]]:
         response = httpx.get(
             f"{self.chat}/api/v1/widget/messages",
             params={"website_token": self.website_token},
@@ -152,9 +151,17 @@ class Visitor:
         messages: list[dict[str, Any]] = (
             found if isinstance(found, list) else found.get("payload", [])
         )
+        return messages
+
+    def everything(self) -> list[str]:
+        """Every message the visitor's widget can read, whoever wrote it."""
+        return [str(m.get("content") or "") for m in self._messages()]
+
+    def replies(self) -> list[str]:
+        """What the visitor sees from the shop: outgoing, public messages."""
         return [
             str(m.get("content") or "")
-            for m in messages
+            for m in self._messages()
             if m.get("message_type") == 1 and not m.get("private")
         ]
 

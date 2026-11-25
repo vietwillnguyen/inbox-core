@@ -122,9 +122,27 @@ Built-ins:
 
 - `GroundedAnswer(retriever, generator, min_score=...)` retrieves passages, keeps those scoring at least `min_score`, and asks the generator to answer from them only.
   It returns the ids and titles of the passages it used as `sources`, and hands off when nothing clears the threshold, when the generator returns the refusal sentinel or nothing, and when retrieval or generation fails.
+  The reply text is the generator's alone and never names its sources.
 - `Template(texts)` returns fixed text the client wrote, by language, and hands off rather than answer in a language it has no text for.
   `Template.from_config` reads a `[templates.<name>]` table from the client config.
 - `HandOff()` always hands off; it is the registry's default for any category without a handler.
+
+### Sources: tracked for staff, not shown to the public
+
+A reply's sources travel beside its text, never in it.
+On every channel and in every delivery mode, the text sent to the public, or held as a draft for a person to approve, has no source ids, titles or "Source:" line.
+So an approved draft cannot carry one into the sent message either, unless the person reviewing it types one.
+The sources are kept for staff in three places:
+
+- the audit record's `sources` (ids), for every answered or held reply;
+- the held draft, which the store keeps with its source ids and which the Chatwoot draft tab lists with their titles;
+- a staff-only note through the channel's hand-off actions: the review note of a held draft, and, once an answer is sent automatically, a note with purpose `answered` naming each source's id and title.
+
+The `answered` note is best effort and comes after the answer: a failure is logged by exception type, recorded as `source_note` in `handoff_failures`, and the answer stands.
+Nothing labels, assigns or opens an answered conversation.
+
+A client that wants the public to see the sources sets `show_sources = true` in `[delivery]` (off by default); the pipeline then adds "Source: <id> <title>; ..." to the reply text, and the staff records are unchanged.
+The groundedness evaluation judges the handler's text against the knowledge entries named in its `sources`, so it does not depend on the text naming them.
 
 `InMemoryRetriever` is BM25 over titles, keywords and text, with no embeddings and no network, for tests, demos and small knowledge bases.
 `load_markdown_knowledge` reads `## <id> <title>` sections, each optionally starting with a `Keywords:` line, which is how an English entry can be found by a question in another language.
@@ -277,10 +295,11 @@ A failed holding message does not stop the hand-off; a holding message or answer
 A shared inbox such as Chatwoot can do four things when a person must act: add an internal note only staff see, label the conversation, assign it, and open it in a person's queue.
 `inbox_core.handoff.HandOffActions` is that protocol, passed to the pipeline as `handoff_actions`.
 The pipeline calls it for a hand-off (purpose `hand_off`) and for a drafted reply held for review (purpose `review`), in a fixed order: holding message, note, labels, assign, open, notifier, pause.
+After an answer is sent automatically it calls only `add_internal_note` (purpose `answered`), with the answer's sources; see "Sources" above.
 
 - The note, the labels and the assignment are best effort: a failure is logged by exception type and named in the audit record's `handoff_failures`, and the hand-off continues.
 - Opening is what puts the conversation in front of a person, so failing to open fails closed: the message is `incomplete` and retried, and the retry neither repeats the holding message nor counts its own earlier reply against the per-conversation cap.
-- The note and labels are composed by the core from fixed phrases, category and tier names, source ids and numbers (`handoff_note`, `handoff_labels`), so posting them cannot copy what the visitor wrote.
+- The note and labels are composed by the core from fixed phrases, category and tier names, source ids and the titles the client gave those entries, and numbers (`handoff_note`, `handoff_labels`), so posting them cannot copy what the visitor wrote.
 - Holding a draft for review does not pause the conversation and does not call the notifier; it is not a hand-off.
   The draft counts as the conversation's bot reply, so with the default cap of one the next message is handed off.
 

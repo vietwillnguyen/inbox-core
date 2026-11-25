@@ -92,7 +92,9 @@ def default_handlers(
     """A template for each auto-answered category that has one, else a grounded answer.
 
     The extractive stand-in answers from the best passage alone, so it is given
-    only that one: the sources a reply cites must be the ones it was written from.
+    only that one: the sources kept for staff must be the ones it was written from.
+    Replies do not name their sources; the audit record, the draft tab and a
+    private note on the conversation do.
     """
     limit = 1 if isinstance(generator, ExtractiveGenerator) else 3
     handlers: dict[str, Handler] = {}
@@ -100,9 +102,7 @@ def default_handlers(
         if name in config.templates:
             handlers[name] = Template.from_config(config, name)
         else:
-            handlers[name] = GroundedAnswer(
-                retriever, generator, min_score=min_score, limit=limit, cite=True
-            )
+            handlers[name] = GroundedAnswer(retriever, generator, min_score=min_score, limit=limit)
     return HandlerRegistry(handlers)
 
 

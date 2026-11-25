@@ -42,11 +42,14 @@ def test_repair_advice_is_held_until_the_owner_approves_it(
     )
     assert "barrel adjuster" in draft["text"]
     assert draft["sources"][0]["id"] == "QCW-25"
+    assert "Source" not in draft["text"]
+    assert "QCW-" not in draft["text"]
+    assert any("Sources: QCW-25" in note for note in owner.notes(person.conversation_id or 0))
     quiet_for(lambda: bool(person.replies()), 4)
     found = owner.conversation(person.conversation_id or 0)
     assert "draft-pending" in found["labels"]
     (record,) = audit_for(person.conversation_id or 0)
-    assert record["decision"] == "answer_held"
+    assert (record["decision"], record["sources"][0]) == ("answer_held", "QCW-25")
 
     edited = draft["text"] + "\n\nChecked by a mechanic."
     path = f"/tab/conversations/{person.conversation_id}/drafts/{draft['id']}/send"
@@ -55,6 +58,7 @@ def test_repair_advice_is_held_until_the_owner_approves_it(
     )
     assert sent["outcome"] == "sent_edited"
     assert until(person.replies) == [edited]
+    assert not any("QCW-" in text for text in person.everything())
     admin_id = bundle["CHATWOOT_ADMIN_USER_ID"]
     assert any(
         f"sent edited by agent {admin_id}" in note

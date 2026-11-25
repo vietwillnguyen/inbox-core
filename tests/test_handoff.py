@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from inbox_core.handlers import HandlerRegistry, HandlerRequest, HandlerResult
 from inbox_core.handoff import (
     HandOffActions,
     HandOffRequest,
@@ -88,9 +89,10 @@ class TestLabelsAndNotes:
             tier="auto_answer",
             reason="draft mode",
             sources=("KB-01", "KB-02"),
+            titles={"KB-01": "Opening hours"},
         )
         assert review.startswith("inbox-core drafted a reply and is holding it for review")
-        assert "Sources: KB-01, KB-02." in review
+        assert "Sources: KB-01 Opening hours; KB-02." in review
 
     def test_a_request_rejects_free_text_labels(self) -> None:
         with pytest.raises(ValueError, match="label"):
@@ -205,7 +207,7 @@ class TestThePipelineCallsThem:
         request = actions.calls[0][1]
         assert request.purpose == "review"
         assert request.labels == ("draft-pending", "faq")
-        assert "Sources: KB-01." in request.note
+        assert "Sources: KB-01 Opening hours." in request.note
         assert "Held because: draft mode." in request.note
         # Holding a draft is not a hand-off: the conversation stays the bot's.
         conversation = h.store.get_conversation(1)
@@ -213,11 +215,62 @@ class TestThePipelineCallsThem:
         assert conversation.status == "bot"
         assert h.notifier.escalations == []
 
-    def test_a_sent_answer_calls_no_actions(self) -> None:
+    def test_a_sent_answer_only_gets_a_staff_note_of_its_sources(self) -> None:
+        order: list[str] = []
+
+        class Sink:
+            def send_to_public(self, reply: object) -> str:
+                order.append("answer")
+                return "s1"
+
+            def hold_for_review(self, reply: object) -> str:
+                raise AssertionError
+
+        @dataclass
+        class Ordered(RecordingHandOff):
+            def _step(self, name: str, request: HandOffRequest) -> None:
+                order.append(name)
+                super()._step(name, request)
+
+        actions = Ordered()
+        h = harness(handoff_actions=actions, sink=Sink())  # type: ignore[arg-type]
+        record = h.pipeline.process(message(QUESTION))
+        assert record.decision == "answered"
+        assert record.sources == ("KB-01",)
+        # The note follows the answer; nothing labels, assigns or opens it.
+        assert order == ["answer", "add_internal_note"]
+        ((_, request),) = actions.calls
+        assert request.purpose == "answered"
+        assert request.labels == ()
+        assert request.note == (
+            "inbox-core answered this message automatically.\n"
+            "Category: faq. Tier: auto_answer.\n"
+            "Sources: KB-01 Opening hours."
+        )
+        conversation = h.store.get_conversation(1)
+        assert conversation is not None
+        assert conversation.status == "bot"
+
+    def test_an_answer_without_sources_gets_no_note(self) -> None:
+        class Fixed:
+            name = "fixed"
+
+            def handle(self, request: HandlerRequest) -> HandlerResult:
+                return HandlerResult.reply(self.name, "We open at 9am.")
+
         actions = RecordingHandOff()
-        h = harness(handoff_actions=actions)
+        h = harness(handoff_actions=actions, handlers=HandlerRegistry({"faq": Fixed()}))
         assert h.pipeline.process(message(QUESTION)).decision == "answered"
         assert actions.calls == []
+
+    def test_a_failed_source_note_is_recorded_and_the_answer_stands(self) -> None:
+        actions = FailingHandOff(fail_on=frozenset({"add_internal_note"}))
+        h = harness(handoff_actions=actions)
+        record = h.pipeline.process(message(QUESTION))
+        assert record.decision == "answered"
+        assert record.delivery == "sent"
+        assert record.handoff_failures == ("source_note",)
+        assert len(h.sink.sent) == 1
 
     @pytest.mark.parametrize("step", ["add_internal_note", "add_labels", "assign"])
     def test_a_failed_secondary_step_is_recorded_and_does_not_stop_the_hand_off(
