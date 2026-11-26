@@ -150,6 +150,17 @@ jobs:
       - name: The proxy in tunnel mode
         run: ./deploy/tests/proxy_tunnel_test.sh
 
+  tunnel-e2e:
+    name: tunnel mode end to end (deploy agent, smoke test through a stand-in edge, rollback)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Deploy, smoke test and roll back
+        run: ./deploy/tests/tunnel_e2e.sh
+
   secrets:
     name: secret scan
     runs-on: ubuntu-latest

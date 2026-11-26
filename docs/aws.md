@@ -335,5 +335,6 @@ None of this is tested against a real AWS or Cloudflare account; CI checks it wi
 - `deploy/tests/agent_test.sh`: the agent against a local git remote, in an Ubuntu container: a new tag is deployed, a failing one rolled back, nothing happens without a new tag, and the secrets step fails closed.
 - `deploy/tests/bootstrap_test.sh`: the bootstrap on a fresh Ubuntu 24.04 container, packages included.
 - `deploy/tests/proxy_tunnel_test.sh`: the bundle's proxy in tunnel mode.
+- `deploy/tests/tunnel_e2e.sh`: the agent deploys the real bundle in tunnel mode behind a local TLS edge that stands in for Cloudflare, the smoke test passes over https through it, and a release whose smoke test fails is rolled back.
 
 The configuration also works with OpenTofu 1.11 or later, except that OpenTofu's support for the write-only value used with `manage_cloudflare` should be checked first.

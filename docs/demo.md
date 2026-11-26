@@ -186,6 +186,7 @@ With a `DEMO_DOMAIN` such as `demo.example.com`, set `DEMO_CHAT_HOST` and `DEMO_
 Behind the tunnel every request reaches the proxy from cloudflared, so the rate limits count each visitor by the `Cf-Connecting-Ip` header Cloudflare sets, and the forwarded scheme is trusted; both are safe because nothing but cloudflared can reach the proxy.
 `deploy/tests/proxy_tunnel_test.sh` checks this mode's proxy.
 
+`DEMO_PROJECT` names the compose project (default `inboxcore-demo`), so a second copy can run on the same machine with its own containers and volumes.
 `DEMO_ENV_FILE` names a settings file outside the repository (such as `/etc/inbox-core/demo.env`) in place of `deploy/demo/.env`; the deploy agent in [aws.md](aws.md) uses it.
 
 ## Running it
