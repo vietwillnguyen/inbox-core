@@ -12,10 +12,13 @@ Going live needs only:
 
 Everything else, including every secret, is generated on the server by the bring-up command.
 
+To run it on AWS with no inbound port at all, behind a Cloudflare Tunnel, and deploy new versions by pushing a release tag, follow [aws.md](aws.md) instead of the server steps below.
+
 ## What is in the bundle
 
 | Container | Image | What it does |
 |---|---|---|
+| `tunnel` | `cloudflare/cloudflared:2026.10.7` | Only with `DEMO_TUNNEL=on`: connects out to a Cloudflare Tunnel, so nothing is published (see [Behind a Cloudflare Tunnel instead](#behind-a-cloudflare-tunnel-instead)) |
 | `proxy` | `traefik:v3.6.2` | The only published ports (80, 443). Certificates from Let's Encrypt, per-address rate limits, and routing; everything not listed below answers 404 |
 | `rails`, `sidekiq` | `chatwoot/chatwoot:v4.19.1-ce` | Chatwoot Community Edition: the widget's API and the owner's dashboard |
 | `postgres`, `redis` | `pgvector/pgvector:pg16`, `redis:7-alpine` | Chatwoot's database and queue; Redis also keeps the model spend counter |
@@ -31,8 +34,8 @@ Three host names point at the server:
 | Host | Serves |
 |---|---|
 | `DEMO_DOMAIN` (for example `demo.example.com`) | The visitor's page |
-| `chat.DEMO_DOMAIN` | Chatwoot: the widget's API and the owner's dashboard |
-| `bot.DEMO_DOMAIN` | inbox-core's draft tab only (`/tab`), which the dashboard frames |
+| `chat.DEMO_DOMAIN` (or `DEMO_CHAT_HOST`) | Chatwoot: the widget's API and the owner's dashboard |
+| `bot.DEMO_DOMAIN` (or `DEMO_BOT_HOST`) | inbox-core's draft tab only (`/tab`), which the dashboard frames |
 
 inbox-core's webhook, `/healthz` and `/metrics`, and the gateway are reachable only inside the compose network.
 
@@ -167,6 +170,24 @@ Sign in at `https://chat.DEMO_DOMAIN` and change it under Profile settings.
 It checks that the page, Chatwoot and the draft tab are served, that inbox-core's internals and Chatwoot's super-admin pages are not, and asks one question as a new visitor and waits for the grounded answer.
 It then checks that the answer names no knowledge source to the visitor, and that the service's audit record, read from the inbox-core container's log, keeps the answer's sources.
 Then open `https://DEMO_DOMAIN` in a browser and try the questions the page suggests.
+
+### Behind a Cloudflare Tunnel instead
+
+The bundle can also publish nothing at all: with `DEMO_TUNNEL=on` the proxy listens on this machine's loopback only, it requests no certificate, and a `tunnel` container (cloudflared, compose profile `tunnel`) connects out to Cloudflare, which serves the host names over https.
+No firewall port has to be opened, and the server needs no public inbound address.
+
+1. In Cloudflare Zero Trust, create a tunnel (Networks, Tunnels, Create a tunnel, Cloudflared) and copy its token.
+2. Give the tunnel one public hostname per host, each with the service `HTTP` and URL `proxy:80`: `DEMO_DOMAIN`, the chat host and the bot host.
+3. In `deploy/demo/.env`, set `DEMO_TUNNEL=on` and `DEMO_TUNNEL_TOKEN`; `DEMO_ACME_EMAIL` is not needed.
+4. Run `./deploy/demo/demo.sh up`, then `./deploy/demo/demo.sh settings` to see the mode and the origins.
+
+Cloudflare's free certificate covers names one level below the zone only (`*.example.com`, not `*.demo.example.com`).
+With a `DEMO_DOMAIN` such as `demo.example.com`, set `DEMO_CHAT_HOST` and `DEMO_BOT_HOST` to names like `demo-chat.example.com` and `demo-bot.example.com`.
+Behind the tunnel every request reaches the proxy from cloudflared, so the rate limits count each visitor by the `Cf-Connecting-Ip` header Cloudflare sets, and the forwarded scheme is trusted; both are safe because nothing but cloudflared can reach the proxy.
+`deploy/tests/proxy_tunnel_test.sh` checks this mode's proxy.
+
+`DEMO_PROJECT` names the compose project (default `inboxcore-demo`), so a second copy can run on the same machine with its own containers and volumes.
+`DEMO_ENV_FILE` names a settings file outside the repository (such as `/etc/inbox-core/demo.env`) in place of `deploy/demo/.env`; the deploy agent in [aws.md](aws.md) uses it.
 
 ## Running it
 

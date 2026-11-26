@@ -1,0 +1,3 @@
+# The scripts source .env files they write themselves at run time (deploy/*/.local/),
+# which do not exist when they are checked; shellcheck cannot follow them.
+disable=SC1091

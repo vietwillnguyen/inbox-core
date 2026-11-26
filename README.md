@@ -144,6 +144,7 @@ Webhooks are checked against Chatwoot's signature, held drafts are reviewed in a
 A deployable bundle for one small server (an Oracle Cloud Ampere instance is enough): a made-up shop's knowledge base and configuration, per-address rate limits, a daily model spend cap, an hourly reset of conversations, and a stand-in model so it runs and is tested end to end with no key.
 Switching to Gemini is one setting.
 [`docs/demo.md`](docs/demo.md) is the runbook: sizing, DNS, settings, bring-up, smoke test, reset and teardown.
+[`docs/aws.md`](docs/aws.md) runs it on AWS with Terraform, behind a Cloudflare Tunnel with no inbound port, deployed by pushing a release tag that the server pulls and smoke-tests.
 
 ## A worked example
 

@@ -1,0 +1,25 @@
+# Copy to terraform.tfvars (gitignored) and fill in. No secret belongs here:
+# the Gemini key and the tunnel token go into Parameter Store (docs/aws.md).
+
+# Required.
+initial_tag  = "demo-v0.1.0"
+budget_email = "alerts@example.com"
+
+# The defaults, for reference.
+# region              = "us-east-1"
+# instance_type       = "t4g.medium"
+# architecture        = "arm64"
+# root_volume_size_gb = 30
+# budget_limit_usd    = 40
+# demo_domain         = "demo.vnlabs.dev"
+# demo_chat_host      = "demo-chat.vnlabs.dev"
+# demo_bot_host       = "demo-bot.vnlabs.dev"
+# demo_model          = "gemini"
+# demo_daily_budget_usd = "1.00"
+# tag_pattern         = "demo-v*"
+
+# Optional: the tunnel and DNS records through Cloudflare's API. Export
+# CLOUDFLARE_API_TOKEN instead of writing the token here.
+# manage_cloudflare     = true
+# cloudflare_account_id = "0123456789abcdef0123456789abcdef"
+# cloudflare_zone_id    = "0123456789abcdef0123456789abcdef"

@@ -3,8 +3,15 @@
 # (deploy/demo/demo.sh writes them). Three host names, one server:
 #
 #   DEMO_DOMAIN           the visitor's page with the chat widget
-#   chat.DEMO_DOMAIN      Chatwoot: the widget's API and the owner's dashboard
-#   bot.DEMO_DOMAIN       inbox-core's draft tab, framed inside the dashboard
+#   DEMO_CHAT_HOST        Chatwoot: the widget's API and the owner's dashboard
+#                         (chat.DEMO_DOMAIN unless named)
+#   DEMO_BOT_HOST         inbox-core's draft tab, framed inside the dashboard
+#                         (bot.DEMO_DOMAIN unless named)
+#
+# DEMO_TLS=on terminates TLS here with Let's Encrypt. Behind a Cloudflare
+# Tunnel it is off and Cloudflare serves the certificates; the rate limits then
+# count the visitor's address from DEMO_CLIENT_IP_HEADER (Cf-Connecting-Ip),
+# because every request arrives from the cloudflared container.
 #
 # inbox-core's webhook is not routed here at all: Chatwoot reaches it on the
 # compose network. Neither is the LiteLLM gateway. Anything not listed below,
@@ -14,9 +21,11 @@
 # Chatwoot. Nothing here sits between Chatwoot and inbox-core, which must never
 # answer 429 or 500 (docs/chatwoot.md).
 {{ $page := env "DEMO_DOMAIN" }}
-{{ $chat := printf "chat.%s" (env "DEMO_DOMAIN") }}
-{{ $bot := printf "bot.%s" (env "DEMO_DOMAIN") }}
+{{ $chat := env "DEMO_CHAT_HOST" }}
+{{ $bot := env "DEMO_BOT_HOST" }}
 {{ $tls := eq (env "DEMO_TLS") "on" }}
+{{ $https := eq (env "DEMO_PUBLIC_HTTPS") "on" }}
+{{ $ipHeader := env "DEMO_CLIENT_IP_HEADER" }}
 {{ $entry := "web" }}{{ if $tls }}{{ $entry = "websecure" }}{{ end }}
 
 http:
@@ -112,29 +121,45 @@ http:
         average: {{ env "DEMO_RATE_MESSAGES_PER_MINUTE" }}
         period: 1m
         burst: {{ env "DEMO_RATE_MESSAGES_BURST" }}
+        {{- if $ipHeader }}
+        sourceCriterion:
+          requestHeaderName: "{{ $ipHeader }}"
+        {{- end }}
     visitor-contacts:
       rateLimit:
         average: {{ env "DEMO_RATE_CONTACTS_PER_HOUR" }}
         period: 1h
         burst: {{ env "DEMO_RATE_CONTACTS_BURST" }}
+        {{- if $ipHeader }}
+        sourceCriterion:
+          requestHeaderName: "{{ $ipHeader }}"
+        {{- end }}
     general:
       rateLimit:
         average: 600
         period: 1m
         burst: 200
+        {{- if $ipHeader }}
+        sourceCriterion:
+          requestHeaderName: "{{ $ipHeader }}"
+        {{- end }}
     headers:
       headers:
         frameDeny: true
         contentTypeNosniff: true
         referrerPolicy: no-referrer
-        {{- if $tls }}
+        {{- if $https }}
         stsSeconds: 31536000
+        # Behind the tunnel TLS ends at Cloudflare, so the proxy sees plain HTTP.
+        forceSTSHeader: true
         {{- end }}
     chat-headers:
       headers:
         contentTypeNosniff: true
-        {{- if $tls }}
+        {{- if $https }}
         stsSeconds: 31536000
+        # Behind the tunnel TLS ends at Cloudflare, so the proxy sees plain HTTP.
+        forceSTSHeader: true
         {{- end }}
 
   services:

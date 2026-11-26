@@ -1,0 +1,45 @@
+#cloud-config
+# The inbox-core demo instance's first boot. No secret is in here: the
+# secrets are read from Parameter Store by the instance role, on the host,
+# before every deploy. Rendered by deploy/aws/main.tf.
+
+write_files:
+  - path: /etc/inbox-core/demo.settings
+    owner: root:root
+    permissions: "0600"
+    content: |
+      ${indent(6, demo_settings)}
+  - path: /etc/inbox-core/ssm-secrets.conf
+    owner: root:root
+    permissions: "0600"
+    content: |
+      AWS_REGION=${region}
+      SECRET_PARAMETERS="${secret_parameters}"
+  - path: /usr/local/libexec/inbox-core/fetch-secrets
+    owner: root:root
+    permissions: "0755"
+    encoding: b64
+    content: ${fetch_secrets_b64}
+
+runcmd:
+  - [chmod, "0700", /etc/inbox-core]
+  # The AWS CLI, for the secrets step only (Ubuntu 24.04 packages it as a snap).
+  - [snap, wait, system, seed.loaded]
+  - [snap, install, aws-cli, --classic]
+  - [git, clone, --quiet, "${repository_url}", /opt/inbox-core]
+  - [git, -C, /opt/inbox-core, -c, advice.detachedHead=false, checkout, --quiet, --detach, "refs/tags/${initial_tag}"]
+  - - /opt/inbox-core/deploy/gitops/bootstrap.sh
+    - --checkout
+    - /opt/inbox-core
+    - --tag-pattern
+    - "${tag_pattern}"
+    - --initial-tag
+    - "${initial_tag}"
+    - --settings
+    - /etc/inbox-core/demo.settings
+    - --secrets-command
+    - /usr/local/libexec/inbox-core/fetch-secrets
+    - --interval
+    - "${deploy_interval}"
+    - --auto-reboot
+    - "${auto_reboot_time}"

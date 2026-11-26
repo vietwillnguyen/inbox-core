@@ -1,0 +1,29 @@
+# The demo's real proxy service (command, flags, dynamic.yaml) in tunnel mode,
+# in front of stand-in upstreams, for deploy/tests/proxy_tunnel_test.sh. The
+# stand-ins answer as page, rails and inbox-core; /cgi-bin/headers echoes what
+# reached the upstream.
+name: inboxcore-proxytest
+
+services:
+  proxy:
+    extends:
+      file: ../../demo/compose.yaml
+      service: proxy
+    depends_on: !reset []
+    ports: !override
+      - "127.0.0.1:${PROXYTEST_PORT}:80"
+
+  upstream:
+    image: busybox:1.37
+    command:
+      - sh
+      - -c
+      - httpd -p 8080 -h /www && httpd -p 3000 -h /www && exec httpd -f -p 8000 -h /www
+    volumes:
+      - ./www:/www:ro
+    networks:
+      default:
+        aliases: [page, rails, inbox-core]
+
+volumes:
+  certificates:

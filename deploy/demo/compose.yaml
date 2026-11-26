@@ -7,7 +7,9 @@
 # is published for linux/arm64 as well as linux/amd64, so the same file runs on
 # an Oracle Cloud Ampere server. See docs/demo.md.
 #
-# Only the proxy publishes ports. The project name is fixed so every command
+# Only the proxy publishes ports (on loopback only, in tunnel mode). The
+# cloudflared connector runs only with the "tunnel" profile, which demo.sh
+# enables when DEMO_TUNNEL=on. The project name is fixed so every command
 # touches these containers and volumes and nothing else.
 name: inboxcore-demo
 
@@ -41,12 +43,18 @@ services:
       - --certificatesresolvers.le.acme.email=${DEMO_ACME_EMAIL}
       - --certificatesresolvers.le.acme.storage=/certificates/acme.json
       - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      # Trusted only behind the tunnel, where cloudflared is the only client.
+      - --entrypoints.web.forwardedHeaders.insecure=${DEMO_TRUST_FORWARDED:-false}
       - --log.level=WARN
       - --global.checknewversion=false
       - --global.sendanonymoususage=false
     environment:
       DEMO_DOMAIN: ${DEMO_DOMAIN}
+      DEMO_CHAT_HOST: ${DEMO_CHAT_HOST:-chat.${DEMO_DOMAIN}}
+      DEMO_BOT_HOST: ${DEMO_BOT_HOST:-bot.${DEMO_DOMAIN}}
       DEMO_TLS: ${DEMO_TLS}
+      DEMO_PUBLIC_HTTPS: ${DEMO_PUBLIC_HTTPS:-${DEMO_TLS}}
+      DEMO_CLIENT_IP_HEADER: ${DEMO_CLIENT_IP_HEADER:-}
       DEMO_RATE_MESSAGES_PER_MINUTE: ${DEMO_RATE_MESSAGES_PER_MINUTE}
       DEMO_RATE_MESSAGES_BURST: ${DEMO_RATE_MESSAGES_BURST}
       DEMO_RATE_CONTACTS_PER_HOUR: ${DEMO_RATE_CONTACTS_PER_HOUR}
@@ -149,6 +157,19 @@ services:
     depends_on: [inbox-core]
     restart: unless-stopped
     mem_limit: 256m
+    logging: *logging
+
+  # Tunnel mode only: connects out to Cloudflare and hands every request for
+  # the demo's host names to the proxy (the tunnel's public hostnames point at
+  # http://proxy:80). Nothing listens for inbound connections.
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.7
+    profiles: [tunnel]
+    command: ["tunnel", "--no-autoupdate", "run"]
+    env_file: .local/tunnel.env
+    depends_on: [proxy]
+    restart: unless-stopped
+    mem_limit: 128m
     logging: *logging
 
   # The visitor's page with the widget on it, and the 404 for everything else.

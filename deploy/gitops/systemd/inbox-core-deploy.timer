@@ -1,0 +1,11 @@
+[Unit]
+Description=inbox-core demo: check for a new release tag every few minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
