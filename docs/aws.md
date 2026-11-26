@@ -44,10 +44,12 @@ An estimate for `us-east-1` at on-demand prices; check it with the [AWS Pricing 
 | The state bucket | a few cents |
 | **Total** | **about 31 USD** |
 
-- In the default `unlimited` CPU credit mode, a load held above the baseline (20% of each vCPU) for a long time is billed extra; an idle demo stays far below it. Set `cpu_credits = "standard"` to be throttled instead of billed.
+- The instance runs in the `standard` CPU credit mode (the default): when its credits run out it is throttled to the baseline (20% of each vCPU), and it is never billed extra. An idle demo stays far below the baseline; the first boot's image build is slower for it.
+  `cpu_credits = "unlimited"` removes the throttle, and bills a load held above the baseline.
 - A one-year Savings Plan or a smaller instance lowers the instance line; `t4g.small` (2 GB) is too small for the bundle.
 - The Gemini spend is not on the AWS bill: it is capped by `DEMO_DAILY_BUDGET_USD` (1 USD a day by default, so at most about 30 USD a month).
 - The budget alerts; it stops nothing. If a mail arrives you did not expect, stop the instance ([Teardown](#teardown)).
+- The budget covers the whole AWS account, not only these resources. That is right while the account holds only this demo; if anything else moves in, give it its own budget or add a cost filter on the `project` tag.
 
 ## One-time steps only you can do
 
@@ -144,7 +146,18 @@ git tag -a demo-v0.1.0 -m "demo v0.1.0"
 git push origin demo-v0.1.0
 ```
 
-Anyone who can push tags to the repository can deploy; keep that list short (a tag protection rule on `demo-v*` in the repository's settings helps).
+Pushing a `demo-v*` tag deploys it, and the agent runs that tag's code as root on the instance, so who may push such a tag is who may deploy.
+The repository has a tag ruleset for this, *Release tags: owner only* (id `28135642`): it blocks creating, updating and deleting `refs/tags/demo-v*` for everyone except the repository's admins.
+Check that it is still active, and what it covers:
+
+```sh
+gh api repos/vietwillnguyen/inbox-core/rulesets/28135642 \
+  --jq '{name, enforcement, include: .conditions.ref_name.include, rules: [.rules[].type], bypass: .bypass_actors}'
+```
+
+It should show `enforcement: "active"`, `include: ["refs/tags/demo-v*"]`, the rules `creation`, `update` and `deletion`, and only the admin role (`RepositoryRole` 5) allowed to bypass.
+A staging pattern such as `staging-v*` needs a ruleset of its own.
+The agent does not check tag signatures today; requiring signed tags and verifying them on the host (`git verify-tag` against a pinned key) is a possible later hardening.
 
 ## Bring it up
 
@@ -232,7 +245,10 @@ Without `pause`, the next timer run would move forward to the newest tag again.
 ### Settings and secrets
 
 - A new Gemini key or tunnel token: put it into Parameter Store as above, then `sudo inbox-core-deploy redeploy` (the secrets are read again before every deploy).
-- A bundle setting (`demo_daily_budget_usd`, `demo_extra_settings`, the host names): change it in `terraform.tfvars` and `terraform apply`. It is in the user data, so the instance is replaced and comes up fresh at `initial_tag` (set that to the current tag first). The demo keeps nothing worth saving: conversations are reset daily.
+- A bundle setting (`demo_daily_budget_usd`, `demo_extra_settings`, the host names, the region, the instance type) is changed in `terraform.tfvars`, followed by `terraform apply`.
+  **This replaces the instance**: the settings are in the user data, so `apply` destroys the old instance and creates a new one, which boots fresh at `initial_tag` (set that to the current tag first).
+  Everything on the old instance is lost: its conversations, its generated secrets and your dashboard password, which you read again from the new instance's `people.env`.
+  That is accepted for this demo, which deletes its conversations every day anyway; `terraform plan` says `must be replaced` before it happens.
 - A newer Ubuntu image does not replace the instance (`ami` is ignored); the instance updates itself. To move to a new image on purpose, `terraform apply -replace=aws_instance.demo`.
 
 ## Running it
