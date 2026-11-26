@@ -10,6 +10,11 @@ summary = "a made-up bicycle repair, rental and parts shop in the fictional town
 [triage]
 confidence_threshold = 0.7
 fallback_category = "other"
+# The shop answers the prices its knowledge base lists ("How much is a basic
+# service?"), and the core checks in code that every price in an answer is
+# stated in the entry the answer cites; anything else goes to a person.
+# Refunds, discounts, deposits, disputes, haggling and custom quotes always do.
+prices = "published_prices_only"
 
 [triage.languages]
 en = "English"
@@ -18,7 +23,7 @@ en = "English"
 name = "faq"
 auto_answer = true
 escalates_to = "needs_admin"
-description = "a general question about the shop: opening hours, where it is, what it repairs, rental bikes, classes, fitting, accessibility, refurbished and children's bikes"
+description = "a general question about the shop: opening hours, where it is, what it repairs, what its services and rentals cost, rental bikes, classes, fitting, accessibility, refurbished and children's bikes"
 
 [[triage.categories]]
 name = "repair_advice"

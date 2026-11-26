@@ -29,7 +29,19 @@ asks_for_human = [
 
 mentions_money = [
     "£", "\\$", "€", "\\bmoney\\b", "\\bprice", "\\bcost", "how much", "\\brefund", "\\bpay",
-    "\\bdeposit", "\\bfee", "\\bcharge", "\\bcard\\b", "\\binvoice", "\\bsponsor", "\\bcheap",
+    "\\bdeposit", "\\bfee", "\\bcharge", "\\bcard\\b", "\\binvoice", "\\bsponsor", "\\bcheap", "discount",
+]
+
+# Asked only because the shop answers listed prices (triage.prices): a message
+# about money that is only a question about a usual price, with nothing from
+# unlisted_price in it, is a price question.
+listed_price = [
+    "how much", "\\bprices?\\b", "\\bcosts?\\b", "what do you charge", "\\brates?\\b",
+]
+unlisted_price = [
+    "discount", "cheaper", "\\bdeal\\b", "money back", "\\brefund", "negotiat", "haggl",
+    "would you (do|take|accept)", "instead\\?", "\\bquote", "estimate", "overcharg", "charged",
+    "deposit", "price match", "\\brebuild", "restor", "custom", "\\bvintage\\b",
 ]
 
 [[rules]]
@@ -75,5 +87,5 @@ patterns = [
     "parking", "electric bikes?", "e-?bikes?", "walk in", "without an appointment", "\\brent\\b",
     "rental", "\\bhire\\b", "helmet", "\\block\\b", "wheelchair", "accessib", "trikes?", "class",
     "learn", "second hand", "refurbished", "trade-?ins?", "outgrown", "fitting", "voucher",
-    "\\bservice\\b", "\\babren\\b", "horario",
+    "\\bservice\\b", "\\babren\\b", "horario", "how much", "\\bprices?\\b", "\\bcost",
 ]

@@ -7,8 +7,9 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md LICENSE NOTICE ./
 COPY src ./src
+# notify brings Apprise, so a client can turn notifications on in its config.
 # The demo bundle adds --extra litellm, to reach its model through the gateway.
-ARG EXTRAS="--extra chatwoot"
+ARG EXTRAS="--extra chatwoot --extra notify"
 RUN uv sync --locked --no-dev $EXTRAS
 
 RUN useradd --system --uid 10001 inboxcore && mkdir -p /data && chown inboxcore /data

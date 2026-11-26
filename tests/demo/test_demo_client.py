@@ -56,8 +56,8 @@ class TestTheShop:
         assert loaded.delivery.mode.value == "auto"
         assert loaded.delivery.approval_categories == frozenset({"repair_advice"})
 
-    def test_thirty_knowledge_entries(self) -> None:
-        assert len(load_markdown_knowledge(CLIENT / "knowledge.md")) == 30
+    def test_thirty_two_knowledge_entries(self) -> None:
+        assert len(load_markdown_knowledge(CLIENT / "knowledge.md")) == 32
 
     def test_the_golden_set_is_valid_and_covers_every_category(self) -> None:
         cases = golden()
@@ -88,6 +88,8 @@ class TestTheShop:
             "QCW-12": "https://quillmoor-cycles.example/rentals",
             "QCW-22": "https://quillmoor-cycles.example/classes",
             "QCW-25": "https://quillmoor-cycles.example/guides/gears",
+            "QCW-31": "https://quillmoor-cycles.example/prices",
+            "QCW-32": "https://quillmoor-cycles.example/prices",
         }
 
 
@@ -131,6 +133,23 @@ class TestTheStandInClassifies:
         )
         assert reply["category"] == "refund"
         assert reply["mentions_money_or_commitment"] is True
+        # Not asked the fifth question, so it does not answer it.
+        assert "asks_listed_price" not in reply
+
+    def test_it_answers_the_price_question_only_when_asked(self) -> None:
+        def ask(body: str) -> Any:
+            system = "You classify messages.\nasks_listed_price: Is every mention..."
+            return json.loads(
+                model().complete(
+                    [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": json.dumps({"subject": "", "body": body})},
+                    ]
+                )
+            )["asks_listed_price"]
+
+        assert ask("How much is a puncture repair?") is True
+        assert ask("Can I have a discount on a puncture repair?") is False
 
 
 class TestTheStandInAnswers:
@@ -244,3 +263,67 @@ class TestTheVisitorSeesLinksNotSources:
         assert "QCW-" not in sent.text
         assert "Opening hours" not in sent.text
         assert record.sources[0] == "QCW-01"
+
+
+class TestTheShopAnswersListedPrices:
+    """The demo's ``triage.prices = "published_prices_only"``, end to end on the stand-in."""
+
+    def run(self, question: str, *, answer: str | None = None) -> tuple[Any, Any]:
+        from inbox_core.pipeline import InMemoryAuditSink, Pipeline
+        from inbox_core.store.memory import InMemoryConversationStore
+        from inbox_core.testing.fakes import RecordingNotifier, RecordingSink
+        from tests.helpers import message
+
+        standin = model()
+
+        def completion(**kwargs: Any) -> dict[str, Any]:
+            content = standin.complete(kwargs["messages"])
+            if answer is not None and "response_format" not in kwargs:
+                content = answer  # a model that writes its own figure
+            return {"choices": [{"message": {"content": content}}]}
+
+        entries = load_markdown_knowledge(CLIENT / "knowledge.md")
+        sink, audit = RecordingSink(), InMemoryAuditSink()
+        Pipeline(
+            config=config(),
+            classifier=LiteLLMClassifier(config(), completion=completion),
+            handlers=default_handlers(
+                config(), InMemoryRetriever(entries), LiteLLMGenerator(completion=completion)
+            ),
+            sink=sink,
+            store=InMemoryConversationStore(),
+            notifier=RecordingNotifier(),
+            audit=audit,
+        ).process(message(question))
+        return sink, audit.records[-1]
+
+    def test_the_shop_answers_prices(self) -> None:
+        assert config().triage.prices == "published_prices_only"
+
+    def test_a_listed_price_is_answered_with_its_page(self) -> None:
+        sink, record = self.run("How much does a basic service cost?")
+        assert record.decision == "answered"
+        assert record.sources[0] == "QCW-31"
+        (sent,) = sink.sent
+        assert "A basic service costs £45" in sent.text
+        assert sent.text.endswith("More: https://quillmoor-cycles.example/prices")
+
+    def test_an_invented_price_goes_to_a_person(self) -> None:
+        sink, record = self.run(
+            "How much does a basic service cost?", answer="A basic service is £39."
+        )
+        assert (record.decision, record.tier) == ("handed_off", "needs_executive")
+        assert [reply.kind for reply in sink.sent] == ["holding"]
+
+    @pytest.mark.parametrize(
+        "question",
+        [
+            "Is there a discount on a full service if I bring two bikes?",
+            "Would you do a basic service for £30 instead?",
+            "My rental deposit still has not come back to my card.",
+        ],
+    )
+    def test_everything_else_about_money_goes_to_a_person(self, question: str) -> None:
+        sink, record = self.run(question)
+        assert (record.decision, record.tier) == ("handed_off", "needs_executive")
+        assert [reply.kind for reply in sink.sent] == ["holding"]

@@ -150,4 +150,20 @@ Charge it at room temperature with its own charger.
 ## QCW-30 About this chat
 Keywords: chat, assistant, bot, robot, person, human, staff, who am i talking to
 This chat is answered by an assistant that uses only the shop's own information.
-Anything it cannot answer from that information, and anything about money, bookings or safety, goes to a person from the shop.
+It gives only the prices listed in that information.
+Anything it cannot answer from that information, and anything else about money, such as refunds, discounts or quotes, and anything about bookings or safety, goes to a person from the shop.
+
+## QCW-31 Service and repair prices
+Keywords: price, prices, cost, costs, how much, charge, pay, basic service, full service, puncture, fix, fitting, labour
+URL: https://quillmoor-cycles.example/prices
+A basic service costs £45 and a full service costs £120.
+A puncture repair costs £12, including a new inner tube.
+A bike fitting costs £60.
+Parts are extra, at the price shown in the shop.
+
+## QCW-32 Rental prices
+Keywords: price, prices, cost, costs, how much, rent, rental, rentals, hire, day, week, daily, weekly, rate, e-bike, ebike, city bike, hybrid, kids, children, tag-along
+URL: https://quillmoor-cycles.example/prices
+A city bike or a hybrid rents for £20 a day or £90 a week.
+An e-bike rents for £35 a day or £150 a week.
+Children's bikes and tag-alongs rent for £10 a day.
