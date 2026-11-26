@@ -23,7 +23,10 @@ On a machine that already has the images it takes under two minutes.
 | The inbox-core service | http://127.0.0.1:3912 (`/healthz`, `/metrics`, `/tab`) |
 
 The compose project is `inboxcore` and every port is published on 127.0.0.1 only.
+For a second copy on one machine, set `STACK_PROJECT` and the three ports (`CHATWOOT_PORT`, `DEMO_PORT`, `SERVICE_PORT`) for every `stack.sh` command; the end-to-end suite reads them back from `.local/stack.env`.
 The visitor page uses `localhost` and the dashboard `127.0.0.1` on purpose: browsers share cookies across the ports of one host name, so clearing a visitor's cookies would otherwise sign the agent out.
+
+The local stack's seed does not set the hand-off rule or business hours (the variables in [Telling a person](#telling-a-person) are unset), so its end-to-end suite sees Chatwoot as it was; the demo bundle sets them.
 
 Other commands: `stack.sh mode off|draft|auto` restarts the service in that delivery mode, `stack.sh stop-service` and `start-service` take the service away to see Chatwoot's fallback, `stack.sh retention DAYS` runs the retention job, `stack.sh logs`, `stack.sh status`, `stack.sh down` (stop, keep the data) and `stack.sh destroy` (delete this project's volumes, after asking).
 
@@ -43,10 +46,11 @@ For a real deployment set `INBOX_CORE_CLASSIFIER=litellm` (the default), install
 | `INBOX_CORE_TAB_SECRET` | At least 32 characters; signs draft-tab sessions |
 | `INBOX_CORE_TAB_SESSION_SECONDS` | How long a tab sign-in lasts; default 1800, between 60 and 28800 |
 | `INBOX_CORE_DATABASE_URL`, `INBOX_CORE_ENCRYPTION_KEYS` | The core's SQL store and its key setting (required: the store is the draft queue) |
-| `INBOX_CORE_ASSIGNEE_ID` | Optional agent id that hand-offs are assigned to |
+| `INBOX_CORE_ASSIGNEE_ID` | Optional agent id that hand-offs are assigned to. The service assigns before it opens the conversation, while Chatwoot still has it as pending, and Chatwoot does not notify an assignment made then; to have someone notified, leave this unset and use the seed's hand-off rule (see [Telling a person](#telling-a-person)) |
 | `INBOX_CORE_MODE` | Optional runtime override of the delivery mode; anything unknown reads as `off` |
 | `INBOX_CORE_CLASSIFIER`, `INBOX_CORE_CONFIG`, `INBOX_CORE_KNOWLEDGE`, `INBOX_CORE_AUDIT_PATH` | See above |
 | `INBOX_CORE_MODEL` | With `litellm`, the model both the classifier and the grounded answer call; default Gemini Flash-Lite (`gemini/gemini-3.5-flash-lite`) |
+| Whatever `[notifications]` names | With a `[notifications]` section in the client config, the service announces hand-offs and held drafts through Apprise; each `${VARIABLE}` in its URLs is read from the environment (see [Telling a person](#telling-a-person)) |
 | `INBOX_CORE_MODEL_API_BASE`, `INBOX_CORE_MODEL_API_KEY` | Optional: a LiteLLM gateway and its key, with `INBOX_CORE_MODEL` set to `litellm_proxy/<model group>`; without them LiteLLM calls the provider with the key in its own variable |
 
 Chatwoot itself needs `SAFE_FETCH_ALLOW_PRIVATE_NETWORK=true` when the service is on a private network (SafeFetch blocks private addresses otherwise), and the stack sets `DISABLE_TELEMETRY=true` and `ENABLE_ACCOUNT_SIGNUP=false`.
@@ -89,6 +93,50 @@ A hand-off adds a staff-only note (fixed phrases, category, tier and reason, nev
 A held draft adds a note naming its sources, `draft-pending` and the category, and opens the conversation; the bot keeps it, so with one bot reply per conversation the next message is handed off.
 
 Processing of one conversation is serialised by a lease in the core store, so two webhooks for one conversation cannot produce two replies, across processes too with a shared SQL database.
+
+## Telling a person
+
+Chatwoot has its own ways of telling agents that a conversation needs them, so a Chatwoot client uses those for hand-offs, and the core adds nothing there but labels and the opening.
+They are configuration, set up by `deploy/chatwoot/seed.rb` from environment variables (each off unless set), so a client changes them in the seed or in Chatwoot's settings, not in code.
+The demo bundle sets all of them.
+
+**Hand-off alerts: an automation rule and assignment notifications.**
+With `HANDOFF_ASSIGNEE_EMAIL`, the seed adds the rule `inbox-core hand-off`: on `conversation_opened`, if the conversation has the label `handoff` or `draft-pending` and nobody is assigned, assign it to that person.
+Chatwoot then notifies them of the assignment, with the notification type `conversation_assignment`: in the dashboard's notifications, by email when Chatwoot has SMTP settings, and by push when the agent allowed it in their browser.
+The seed makes sure that person's assignment notifications (email and push) are on; Chatwoot turns them on for every new member anyway (`app/models/account_user.rb`).
+Why a rule rather than the service's own `INBOX_CORE_ASSIGNEE_ID`: Chatwoot does not notify an assignment made while a conversation is pending (`app/listeners/notification_listener.rb`, `assignee_changed`), and the service assigns before it opens, so that assignment is silent.
+The rule runs after the opening, so the conversation is open and the assignment is notified.
+An agent who is online when the conversation opens may get it from the inbox's auto-assignment first; then the rule does nothing, and Chatwoot notifies that agent instead.
+
+What this covers and what it does not:
+
+- A hand-off and a held draft are both announced: the service labels a held draft `draft-pending` and opens it for review too.
+- The rule fires when a pending conversation is opened. A conversation that is already open (a person reopened it, or resumed the bot and it later handed off again) is not reassigned; whoever has it keeps it.
+- If someone unassigns a labelled conversation, nothing reassigns it until it is next opened.
+- Notifying a whole team instead of one person is a team in Chatwoot with the rule assigning the team (`assign_team`), or `send_email_to_team`; the seed does not set that up.
+
+**Out of hours: per-inbox business hours and the out-of-office message.**
+With `BUSINESS_HOURS` (for example `tue-fri 08:00-18:00, sat 09:00-16:00`; days not named are closed), `BUSINESS_TIMEZONE` (an IANA name) and `OUT_OF_OFFICE_TEXT`, the seed turns on the inbox's working hours with that message.
+Outside them, a visitor's first message of the day in a conversation gets the message, from Chatwoot, as a template message (`app/services/message_templates/hook_execution_service.rb`).
+The service ignores template messages, so the assistant still answers what it can, and a hand-off still gets the holding message.
+Chatwoot sends it at most once a day per conversation, and not when the conversation had a public reply in the last five minutes, so a visitor already talking to the assistant does not get it in the middle.
+While the service is down, the out-of-office message is one more message Chatwoot fails to deliver to the bot, so the service-down rule below may send its holding message once more for that conversation.
+
+**Held drafts and other channels: the core's notifier.**
+A client that wants a held draft (or a hand-off) announced somewhere other than Chatwoot, such as a chat app or a phone, adds a `[notifications]` section to its config (see "Notifications" in [design.md](design.md)).
+The service builds it at start-up when the section is there, linking each notification to the conversation in the dashboard (`<CHATWOOT_ORIGIN>/app/accounts/<id>/conversations/<id>`, where the draft tab is), unless the section sets its own `link`.
+The image includes the `notify` extra.
+With the `reminder` event, `python -m inbox_core.chatwoot remind` sends one reminder for each hand-off and held draft still waiting after `remind_after_minutes`, and prints a JSON report of counts; run it every few minutes from cron or a scheduler.
+
+**What was verified, against Chatwoot v4.19.1 in the demo bundle's end-to-end suite** (`tests/demo_e2e/test_7_prices_and_alerts.py`):
+
+- a hand-off is assigned to the owner by the rule (the assignee is a user, not the bot), and the owner has exactly one `conversation_assignment` notification for it, read back through Chatwoot's notifications API;
+- a held draft is assigned and notified the same way, and nothing reaches the visitor;
+- an answered question is assigned to nobody and notifies nobody;
+- the inbox has the configured hours, timezone and message;
+- with today set to closed, a visitor gets the out-of-office message once, and the assistant's answer as well; with today set to open, no out-of-office message.
+
+Not verified: delivery by email (the bundle has no SMTP server) or push (it has no VAPID keys), which are Chatwoot's own delivery of the same notification records.
 
 ## The draft tab
 

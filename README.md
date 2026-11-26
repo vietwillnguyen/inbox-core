@@ -14,10 +14,11 @@ The reusable "brain" of an inbox assistant.
 A message comes in from any channel and takes the same steps:
 
 1. **Guard**: cheap checks before any model sees it (empty, oversize, a sender flooding).
-2. **Triage**: a classifier reports what the message is about, its language, whether the sender asked for a person and whether money or a commitment is mentioned. The **tier is then decided in code** from the client's category table, never by the model.
+2. **Triage**: a classifier reports what the message is about, its language, whether the sender asked for a person and whether money or a commitment is mentioned (and, for a client that answers prices, whether that is only a question about a usual price). The **tier is then decided in code** from the client's category table, never by the model.
 3. **Handle**: a pluggable handler answers from the client's knowledge, returns a fixed template, or hands off.
 4. **Deliver**: under an `off`, `draft` or `auto` mode, with per-language gates and send caps.
 5. **Hand off**: anything sensitive, unsure or failed goes to a person, with a holding message and a notification.
+6. **Notify** (optional): hand-offs and held drafts are announced through Apprise to wherever the client's people are, with reminders for anything left waiting.
 
 Every message produces one audit record with ids and decisions and no content.
 
@@ -29,6 +30,7 @@ One connection ships with it as an optional extra: [the Chatwoot connection](doc
 
 It guarantees, and its tests check:
 
+- **Prices come from the knowledge base, checked in code.** By default any mention of money goes to a person. A client that sets `triage.prices = "published_prices_only"` gets plain price questions answered, and every price in such a reply must appear, written the same way, in a knowledge entry the reply cites, or the message goes to a person; `draft_for_approval` holds those replies for a person instead. Refunds, discounts, disputes, negotiation and custom quotes always go to a person.
 - **The tier is decided in code.** A model's output can choose a category from the client's table; it cannot choose a tier, a recipient or a delivery mode. A category marked as never auto-answered is never auto-answered, whatever the confidence.
 - **It fails closed.** An unavailable or malformed classifier, a handler that fails, a failed delivery and a reached reply cap all hand the message to a person. If no person could be told, the message is left unhandled so it is retried.
 - **`off` delivers nothing and `draft` never sends.** There is exactly one code path that can send to the public, and a test walks the package source to keep it that way.
@@ -56,7 +58,7 @@ uv add "inbox-core[litellm,sqlalchemy,yaml] @ git+https://github.com/vietwillngu
 ```
 
 The core needs only `cryptography`.
-Extras: `litellm` (the LiteLLM classifier and generator), `jev` (the Jev classifier), `sqlalchemy` (the SQL store), `yaml` (YAML configuration files), `chatwoot` (the Chatwoot connection, the only extra with a web framework).
+Extras: `litellm` (the LiteLLM classifier and generator), `jev` (the Jev classifier), `sqlalchemy` (the SQL store), `yaml` (YAML configuration files), `chatwoot` (the Chatwoot connection, the only extra with a web framework), `notify` (Apprise, for notifications).
 
 ## A configuration
 
@@ -96,6 +98,22 @@ en = "Thanks for writing. A person from the library will reply here."
 es = "Gracias por escribir. Una persona de la biblioteca responderá aquí."
 ```
 
+Two optional settings, both off by default so nothing changes for a client that does not set them:
+
+```toml
+[triage]
+prices = "published_prices_only"   # or "always_hand_off" (the default), or "draft_for_approval"
+
+[notifications]                    # needs the notify extra
+urls = ["${INBOX_CORE_NOTIFY_URL}"]   # Apprise URLs; every secret in a ${VARIABLE} from the environment
+events = ["hand_off", "draft_held", "reminder"]
+remind_after_minutes = 60
+quiet_hours = { start = "22:00", end = "07:00" }
+```
+
+A notification carries the event, the category, tier and reason, and a link to the conversation; never what the sender wrote, their name, email address or phone number.
+A failed notification is recorded in the audit record and changes nothing else.
+
 Validation refuses anything that could auto-answer without a confidence threshold, an unknown tier, duplicate categories, and unknown keys.
 See [`docs/design.md`](docs/design.md) for every rule.
 
@@ -105,6 +123,7 @@ See [`docs/design.md`](docs/design.md) for every rule.
 from inbox_core import GroundedAnswer, HandlerRegistry, Pipeline, load_config
 from inbox_core.adapters.litellm import LiteLLMClassifier, LiteLLMGenerator
 from inbox_core.knowledge import InMemoryRetriever, load_markdown_knowledge
+from inbox_core.notify import build_notifications
 from inbox_core.pipeline import JsonlAuditSink
 from inbox_core.store.memory import InMemoryConversationStore
 
@@ -118,6 +137,7 @@ pipeline = Pipeline(
     store=InMemoryConversationStore(),
     notifier=my_notifier,  # implements Notifier
     audit=JsonlAuditSink("audit.jsonl"),
+    notifications=build_notifications(config),  # None without [notifications]
 )
 record = pipeline.process(incoming_message)
 ```
@@ -132,7 +152,7 @@ A channel with a shared inbox can also pass `handoff_actions` (a note, labels, a
 uv run pytest -m e2e tests/e2e      # the end-to-end suite against it
 ```
 
-Webhooks are checked against Chatwoot's signature, held drafts are reviewed in a tab inside the conversation whose agent is verified with Chatwoot, Chatwoot is set to log without visitor text (proved by the suite), and a retention job deletes old transcripts.
+Webhooks are checked against Chatwoot's signature, held drafts are reviewed in a tab inside the conversation whose agent is verified with Chatwoot, Chatwoot is set to log without visitor text (proved by the suite), a retention job deletes old transcripts, and hand-offs reach a person through Chatwoot's own assignment notifications and business hours.
 [`docs/chatwoot.md`](docs/chatwoot.md) has the details and the residual risks.
 
 ## The public demo
@@ -141,7 +161,7 @@ Webhooks are checked against Chatwoot's signature, held drafts are reviewed in a
 ./deploy/demo/demo.sh up      # Chatwoot, the service, a LiteLLM gateway, a TLS proxy; a made-up bike shop
 ```
 
-A deployable bundle for one small server (an Oracle Cloud Ampere instance is enough): a made-up shop's knowledge base and configuration, per-address rate limits, a daily model spend cap, an hourly reset of conversations, and a stand-in model so it runs and is tested end to end with no key.
+A deployable bundle for one small server (an Oracle Cloud Ampere instance is enough): a made-up shop's knowledge base and configuration (it answers its listed prices), per-address rate limits, a daily model spend cap, an hourly reset of conversations, and a stand-in model so it runs and is tested end to end with no key.
 Switching to Gemini is one setting.
 [`docs/demo.md`](docs/demo.md) is the runbook: sizing, DNS, settings, bring-up, smoke test, reset and teardown.
 [`docs/aws.md`](docs/aws.md) runs it on AWS with Terraform, behind a Cloudflare Tunnel with no inbound port, deployed by pushing a release tag that the server pulls and smoke-tests.
