@@ -116,6 +116,10 @@ def harness(
 QUESTION = "What are your opening hours on Saturday?"
 
 
+def h_decision(client: ClientConfig) -> str:
+    return harness(client=client).pipeline.process(message(QUESTION)).decision
+
+
 HOURS_URL = "https://bikes.example/hours"
 LINKED = (
     dataclasses.replace(ENTRIES[0], url=HOURS_URL),
@@ -303,6 +307,36 @@ class TestAnswering:
         assert record.held_because == "the handler asked for approval"
         assert record.tags == ("tool:refund_proposal",)
         assert h.sink.sent == []
+
+    def test_a_category_configured_for_approval_is_held_even_in_auto(self) -> None:
+        h = harness(client=config(approval_categories=frozenset({"faq"})))
+        record = h.pipeline.process(message(QUESTION))
+        assert record.decision == "answer_held"
+        assert record.held_because == "category faq needs approval"
+        assert record.sources == ("KB-01",)
+        assert h.sink.sent == []
+        assert [r.text for r in h.sink.held] == [ENTRIES[0].text]
+
+    def test_a_held_approval_category_reply_is_sent_once_a_person_approves(self) -> None:
+        h = harness(client=config(approval_categories=frozenset({"faq"})))
+        record = h.pipeline.process(message(QUESTION))
+        assert record.conversation_id is not None
+        [draft] = h.pipeline.drafts.pending(record.conversation_id)
+        h.pipeline.drafts.send(draft.id, reviewer="staff:1")
+        assert [r.text for r in h.sink.sent] == [ENTRIES[0].text]
+
+    def test_categories_not_listed_for_approval_still_send(self) -> None:
+        base = config()
+        rules = tuple(
+            dataclasses.replace(rule, auto_answer=True) if rule.name == "booking" else rule
+            for rule in base.triage.categories
+        )
+        client = dataclasses.replace(
+            base,
+            triage=dataclasses.replace(base.triage, categories=rules),
+            delivery=dataclasses.replace(base.delivery, approval_categories=frozenset({"booking"})),
+        )
+        assert h_decision(client) == "answered"
 
     def test_the_mode_can_be_overridden_at_runtime(self) -> None:
         h = harness(mode="auto", mode_override=DeliveryMode.DRAFT)

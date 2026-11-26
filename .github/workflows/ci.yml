@@ -43,6 +43,41 @@ jobs:
       - name: Regenerate and compare
         run: uv run --no-project python scripts/generate.py --check
 
+  demo:
+    name: demo bundle end to end
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install
+        run: uv sync --locked
+      - name: Bring up the bundle on the stand-in model
+        # The suite posts more than one visitor would, from one address, so the
+        # proxy's limits are raised; the rate-limit test checks the raised one holds.
+        env:
+          DEMO_RATE_MESSAGES_PER_MINUTE: "60"
+          DEMO_RATE_MESSAGES_BURST: "20"
+          DEMO_RATE_CONTACTS_PER_HOUR: "600"
+          DEMO_RATE_CONTACTS_BURST: "60"
+        run: ./deploy/demo/demo.sh up
+      - name: Smoke test
+        run: ./deploy/demo/demo.sh smoke
+      - name: End-to-end suite
+        run: uv run pytest -m demo_e2e tests/demo_e2e -p no:cacheprovider
+      - name: Memory in use
+        if: always()
+        run: ./deploy/demo/demo.sh memory || true
+      - name: Container logs on failure
+        if: failure()
+        run: ./deploy/demo/demo.sh logs | tail -n 400
+      - name: Tear down
+        if: always()
+        run: docker compose -p inboxcore-demo -f deploy/demo/compose.yaml --env-file deploy/demo/.local/bundle.env down -v || true
+
   secrets:
     name: secret scan
     runs-on: ubuntu-latest

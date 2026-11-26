@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from inbox_core.config import DeliveryPolicy
 
 __all__ = [
+    "HANDLER_APPROVAL",
     "CapDecision",
     "Delivery",
     "DeliveryAction",
@@ -226,24 +227,30 @@ class ReplySink(Protocol):
         ...
 
 
+HANDLER_APPROVAL = "the handler asked for approval"
+"""Why a reply was held when its handler set ``requires_approval``."""
+
+
 def choose_route(
     mode: DeliveryMode,
     language: str,
     auto_languages: frozenset[str],
     *,
     requires_approval: bool = False,
+    approval_reason: str = HANDLER_APPROVAL,
 ) -> tuple[Route, str]:
     """Where a reply may go before caps are considered, and why not further.
 
     A pure table: ``off`` is nowhere, ``draft`` is held, and ``auto`` sends
     only a reply in a signed-off language that did not ask for approval.
+    ``approval_reason`` is the fixed phrase recorded when approval holds it.
     """
     if mode is DeliveryMode.OFF:
         return Route.NONE, "delivery is off"
     if mode is DeliveryMode.DRAFT:
         return Route.HOLD, "draft mode"
     if requires_approval:
-        return Route.HOLD, "the handler asked for approval"
+        return Route.HOLD, approval_reason
     if language not in auto_languages:
         return Route.HOLD, f"language {language} is not signed off for automatic sending"
     return Route.SEND, ""
@@ -271,11 +278,20 @@ class Delivery:
             raise ValueError("auto_languages must be a frozenset of language codes")
 
     def deliver(
-        self, reply: OutboundReply, *, sender_key: str, requires_approval: bool = False
+        self,
+        reply: OutboundReply,
+        *,
+        sender_key: str,
+        requires_approval: bool = False,
+        approval_reason: str = HANDLER_APPROVAL,
     ) -> DeliveryResult:
         """Route ``reply`` and deliver it. A failed send propagates and is not counted."""
         route, why = choose_route(
-            self.mode, reply.language, self.auto_languages, requires_approval=requires_approval
+            self.mode,
+            reply.language,
+            self.auto_languages,
+            requires_approval=requires_approval,
+            approval_reason=approval_reason,
         )
         if route is Route.NONE:
             return DeliveryResult(Route.NONE, "none", None, why)

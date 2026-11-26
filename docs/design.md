@@ -187,7 +187,11 @@ New context a handler might need later, such as the conversation so far, is adde
 |---|---|
 | `off` | nowhere: nothing is sent and nothing is drafted |
 | `draft` | held for review |
-| `auto` | sent, unless the language is not signed off for automatic sending or the handler asked for approval, in which case held |
+| `auto` | sent, unless the language is not signed off for automatic sending or approval is required, in which case held |
+
+Approval is required when the handler asks for it (`requires_approval=True`), or when the message's category is listed in the configuration's `delivery.approval_categories`.
+That list may name only categories that can be auto-answered, and it holds for every handler: the assistant drafts the reply and a person sends it.
+The audit record says which: `the handler asked for approval`, or `category <name> needs approval`.
 
 `Delivery.deliver` then applies the caps to a `send` route; a reached cap holds the reply rather than dropping it.
 The caps are a `SendCaps` protocol: a daily cap and a per-sender cap counted in conversations, over the organisation's local day.
@@ -200,7 +204,7 @@ The guarantee that there is exactly one code path to the public is enforced by `
 - every public function and method in every module of the package is walked, and the only send-shaped name is `ReplySink.send_to_public`;
 - the package source is parsed, and the only call of `send_to_public` anywhere is in `Delivery._send`, which `deliver` reaches only after the route is `send`.
 
-The delivery section of the configuration defaults to the safe settings: mode `off`, no language signed off for automatic sending, a daily cap of 30, two conversations per sender per day, one bot reply per conversation, and UTC.
+The delivery section of the configuration defaults to the safe settings: mode `off`, no language signed off for automatic sending, a daily cap of 30, two conversations per sender per day, one bot reply per conversation, no category that needs approval, and UTC.
 An unknown mode in a configuration file is an error; `parse_mode`, for runtime settings such as an environment variable, reads anything unknown as `off`.
 
 ### Held drafts and the acceptance rate

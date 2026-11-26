@@ -1,0 +1,169 @@
+# The public demo bundle: Chatwoot Community Edition, the inbox-core service,
+# a LiteLLM gateway, a reverse proxy with automatic TLS, the visitor's page and
+# a reset job, for the made-up Quillmoor Cycle Works.
+#
+# Run it with ./demo.sh, which writes the gitignored .local/ files this file
+# reads, including .local/bundle.env for the ${...} values below. Every image
+# is published for linux/arm64 as well as linux/amd64, so the same file runs on
+# an Oracle Cloud Ampere server. See docs/demo.md.
+#
+# Only the proxy publishes ports. The project name is fixed so every command
+# touches these containers and volumes and nothing else.
+name: inboxcore-demo
+
+x-logging: &logging
+  # Bounded logs: nothing here logs message text (docs/demo.md), and what is
+  # logged is rotated away rather than kept.
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
+
+x-chatwoot: &chatwoot
+  # The -ce image is built with enterprise/ deleted: MIT only. Pinned; upgrade on purpose.
+  image: chatwoot/chatwoot:v4.19.1-ce
+  env_file: .local/chatwoot.env
+  environment:
+    NODE_ENV: production
+    RAILS_ENV: production
+    INSTALLATION_ENV: docker
+  volumes:
+    - storage_data:/app/storage
+  depends_on: [postgres, redis]
+  restart: unless-stopped
+  logging: *logging
+
+services:
+  proxy:
+    image: traefik:v3.6.2
+    command:
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --providers.file.filename=/etc/traefik/dynamic.yaml
+      - --certificatesresolvers.le.acme.email=${DEMO_ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/certificates/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --log.level=WARN
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
+    environment:
+      DEMO_DOMAIN: ${DEMO_DOMAIN}
+      DEMO_TLS: ${DEMO_TLS}
+      DEMO_RATE_MESSAGES_PER_MINUTE: ${DEMO_RATE_MESSAGES_PER_MINUTE}
+      DEMO_RATE_MESSAGES_BURST: ${DEMO_RATE_MESSAGES_BURST}
+      DEMO_RATE_CONTACTS_PER_HOUR: ${DEMO_RATE_CONTACTS_PER_HOUR}
+      DEMO_RATE_CONTACTS_BURST: ${DEMO_RATE_CONTACTS_BURST}
+    ports:
+      - "${DEMO_HTTP_BIND}:80"
+      - "${DEMO_HTTPS_BIND}:443"
+    volumes:
+      - ./traefik/dynamic.yaml:/etc/traefik/dynamic.yaml:ro
+      - certificates:/certificates
+    depends_on: [page]
+    restart: unless-stopped
+    mem_limit: 128m
+    logging: *logging
+
+  rails:
+    <<: *chatwoot
+    entrypoint: docker/entrypoints/rails.sh
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+    mem_limit: 1g
+
+  sidekiq:
+    <<: *chatwoot
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+    mem_limit: 1g
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    env_file: .local/chatwoot.env
+    environment:
+      POSTGRES_DB: chatwoot
+      POSTGRES_USER: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    mem_limit: 512m
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    env_file: .local/chatwoot.env
+    command: ["sh", "-c", "redis-server --requirepass \"$$REDIS_PASSWORD\" --save 300 1"]
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    mem_limit: 128m
+    logging: *logging
+
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.103.2
+    command: ["--config", "/etc/litellm/config.yaml", "--port", "4000", "--num_workers", "1"]
+    env_file: .local/litellm.env
+    environment:
+      PYTHONPATH: /etc/litellm
+      STANDIN_RULES: /etc/litellm/standin.toml
+      # Use the model price list shipped in the image; never fetch one.
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    volumes:
+      - ./litellm/config.yaml:/etc/litellm/config.yaml:ro
+      - ./litellm/standin_provider.py:/etc/litellm/standin_provider.py:ro
+      - ../../src/inbox_core/testing/standin_model.py:/etc/litellm/standin_model.py:ro
+      - ./client/standin.toml:/etc/litellm/standin.toml:ro
+    depends_on: [redis]
+    restart: unless-stopped
+    mem_limit: 1g
+    logging: *logging
+
+  inbox-core:
+    build:
+      context: ../..
+      dockerfile: deploy/chatwoot/Dockerfile
+      args:
+        EXTRAS: "--extra chatwoot --extra litellm"
+    image: inboxcore/inbox-core:demo
+    env_file: .local/service.env
+    volumes:
+      - service_data:/data
+      - ./client:/config:ro
+    depends_on: [rails, litellm]
+    restart: unless-stopped
+    mem_limit: 512m
+    logging: *logging
+
+  # Deletes every conversation, contact and stored message older than a day,
+  # once an hour (python -m inbox_core.chatwoot retention). It holds the
+  # administrator's token; the service never does.
+  reset:
+    image: inboxcore/inbox-core:demo
+    pull_policy: never
+    env_file: [.local/service.env, .local/reset.env]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          /app/.venv/bin/python -m inbox_core.chatwoot retention --days "$${DEMO_RESET_DAYS:-1}" || echo "reset failed; retrying next hour"
+          sleep "$${DEMO_RESET_EVERY_SECONDS:-3600}"
+        done
+    volumes:
+      - service_data:/data
+    depends_on: [inbox-core]
+    restart: unless-stopped
+    mem_limit: 256m
+    logging: *logging
+
+  # The visitor's page with the widget on it, and the 404 for everything else.
+  page:
+    image: busybox:1.37
+    command: ["httpd", "-f", "-p", "8080", "-h", "/www"]
+    volumes:
+      - ./.local/page:/www:ro
+    restart: unless-stopped
+    mem_limit: 32m
+    logging: *logging
+
+volumes:
+  storage_data:
+  postgres_data:
+  redis_data:
+  service_data:
+  certificates:

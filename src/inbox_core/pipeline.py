@@ -45,7 +45,15 @@ from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
 from inbox_core.config import ClientConfig
-from inbox_core.delivery import Delivery, DeliveryMode, DeliveryResult, ReplySink, Route, SendCaps
+from inbox_core.delivery import (
+    HANDLER_APPROVAL,
+    Delivery,
+    DeliveryMode,
+    DeliveryResult,
+    ReplySink,
+    Route,
+    SendCaps,
+)
 from inbox_core.guards import Guard, default_guards, run_guards
 from inbox_core.handlers import HandlerRegistry, HandlerRequest, Source
 from inbox_core.handoff import (
@@ -592,9 +600,19 @@ class Pipeline:
         )
         draft.sources = reply.sources
         draft.cited = result.sources
+        approval_reason = HANDLER_APPROVAL
+        requires_approval = result.requires_approval
+        if not requires_approval and decision.category in self._config.delivery.approval_categories:
+            requires_approval = True
+            approval_reason = f"category {decision.category} needs approval"
         try:
             delivered = self._deliver_once(
-                conversation, row, reply, draft, requires_approval=result.requires_approval
+                conversation,
+                row,
+                reply,
+                draft,
+                requires_approval=requires_approval,
+                approval_reason=approval_reason,
             )
         except _Unfinished:
             return "an earlier delivery attempt did not finish"
@@ -657,6 +675,7 @@ class Pipeline:
         draft: _Draft,
         *,
         requires_approval: bool = False,
+        approval_reason: str = HANDLER_APPROVAL,
     ) -> DeliveryResult:
         """Deliver ``reply`` unless an earlier attempt for this message already did.
 
@@ -693,7 +712,10 @@ class Pipeline:
         )
         try:
             result = self._delivery.deliver(
-                reply, sender_key=conversation.sender_key, requires_approval=requires_approval
+                reply,
+                sender_key=conversation.sender_key,
+                requires_approval=requires_approval,
+                approval_reason=approval_reason,
             )
         except Exception:
             self._store.finish_outbound(outbound.id, action="failed", provider_ref=None)

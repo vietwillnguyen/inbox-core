@@ -10,7 +10,11 @@ Classifiers by ``INBOX_CORE_CLASSIFIER``:
 
 - ``litellm`` (default): :class:`inbox_core.adapters.litellm.LiteLLMClassifier`,
   with a LiteLLM generator for grounded answers. Needs ``inbox-core[litellm]``
-  and a provider key in the environment.
+  and a provider key in the environment. ``INBOX_CORE_MODEL`` names the model
+  (Gemini Flash-Lite by default); ``INBOX_CORE_MODEL_API_BASE`` and
+  ``INBOX_CORE_MODEL_API_KEY`` point both at a LiteLLM gateway instead of the
+  provider, for example ``litellm_proxy/<model group>`` behind
+  ``http://litellm:4000`` with the gateway's key.
 - ``example-keywords``: the worked example's deterministic keyword stand-in
   and an extractive generator. Not a model and not accurate; for local runs
   and the end-to-end suite, which need no network beyond Chatwoot.
@@ -148,10 +152,19 @@ def build_service(
             classifier = classifier or KeywordClassifier()
             generator = ExtractiveGenerator()
         elif kind == "litellm":
-            from inbox_core.adapters.litellm import LiteLLMClassifier, LiteLLMGenerator
+            from inbox_core.adapters.litellm import (
+                DEFAULT_MODEL,
+                LiteLLMClassifier,
+                LiteLLMGenerator,
+            )
 
-            classifier = classifier or LiteLLMClassifier(config)
-            generator = LiteLLMGenerator()
+            model = source.get("INBOX_CORE_MODEL", "").strip() or DEFAULT_MODEL
+            api_base = source.get("INBOX_CORE_MODEL_API_BASE", "").strip() or None
+            api_key = source.get("INBOX_CORE_MODEL_API_KEY", "").strip() or None
+            classifier = classifier or LiteLLMClassifier(
+                config, model=model, api_base=api_base, api_key=api_key
+            )
+            generator = LiteLLMGenerator(model=model, api_base=api_base, api_key=api_key)
         else:
             raise SettingsError("INBOX_CORE_CLASSIFIER must be litellm or example-keywords")
         handlers = handlers or default_handlers(config, retriever, generator)

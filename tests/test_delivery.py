@@ -111,6 +111,15 @@ class TestChooseRoute:
             "the handler asked for approval",
         )
 
+    def test_the_approval_reason_can_be_named(self) -> None:
+        assert choose_route(
+            DeliveryMode.AUTO,
+            "en",
+            self.AUTO,
+            requires_approval=True,
+            approval_reason="category booking needs approval",
+        ) == (Route.HOLD, "category booking needs approval")
+
 
 class TestDelivery:
     def build(self, mode: DeliveryMode, caps: SendCaps | None = None) -> tuple[Delivery, Any]:
@@ -412,11 +421,21 @@ class TestDeliveryPolicyConfig:
             ({"holding": "hi"}, "holding"),
             ({"colour": "blue"}, "colour"),
             ("off", "delivery must be a table"),
+            ({"approval_categories": "faq"}, "approval_categories must be a list"),
+            ({"approval_categories": ["bookings"]}, "'bookings', which is not a listed category"),
+            ({"approval_categories": ["donation"]}, "'donation', which is never auto-answered"),
         ],
     )
     def test_bad_delivery_settings_are_refused(self, delivery: Any, problem: str) -> None:
         with pytest.raises(ConfigError, match=problem):
             self.load(delivery)
+
+    def test_approval_categories_load(self) -> None:
+        config = self.load({"approval_categories": ["signup"]})
+        assert config.delivery.approval_categories == frozenset({"signup"})
+
+    def test_no_category_needs_approval_by_default(self) -> None:
+        assert self.load({}).delivery.approval_categories == frozenset()
 
     def test_holding_falls_back_to_the_default_language(self) -> None:
         config = self.load({"holding": {"en": "A person will reply soon."}})
