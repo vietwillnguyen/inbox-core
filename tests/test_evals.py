@@ -102,6 +102,39 @@ def write(tmp_path: Path, body: str = GOLDEN, name: str = "golden.toml") -> Path
     return path
 
 
+PRICE_CASE = """
+[[cases]]
+id = "faq-price"
+language = "en"
+text = "How much is a basic service?"
+expected_category = "faq"
+expected_tier = "auto_answer"
+expected_mentions_money = true
+expected_asks_listed_price = true
+must_mention = ["45"]
+"""
+
+
+class TestGoldenPriceCases:
+    def test_a_price_case_is_tiered_by_the_clients_price_setting(self, tmp_path: Path) -> None:
+        answering = bike_config(prices="published_prices_only")
+        (case,) = [
+            c
+            for c in load_golden_set(write(tmp_path, GOLDEN + PRICE_CASE), answering)
+            if c.id == "faq-price"
+        ]
+        assert case.expected_signals().asks_listed_price is True
+        assert case.is_answerable
+        # The same case under the default setting disagrees with derive_tier.
+        with pytest.raises(GoldenSetInvalid, match="asks_listed_price=True"):
+            load_golden_set(write(tmp_path, GOLDEN + PRICE_CASE), CONFIG)
+
+    def test_a_price_question_must_mention_money(self, tmp_path: Path) -> None:
+        body = GOLDEN + PRICE_CASE.replace("expected_mentions_money = true\n", "")
+        with pytest.raises(GoldenSetInvalid, match="needs expected_mentions_money"):
+            load_golden_set(write(tmp_path, body), bike_config(prices="published_prices_only"))
+
+
 class TestGoldenSet:
     def test_a_valid_set_loads(self, tmp_path: Path) -> None:
         cases = load_golden_set(write(tmp_path), CONFIG)

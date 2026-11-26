@@ -48,11 +48,19 @@ from inbox_core.handlers import (
     Template,
 )
 from inbox_core.knowledge import InMemoryRetriever, KnowledgeEntry, load_markdown_knowledge
+from inbox_core.notify import LinkBuilder, Notifications, build_notifications
 from inbox_core.pipeline import AuditSink, Escalation, JsonlAuditSink, LoggingAuditSink, Pipeline
 from inbox_core.store.sqlalchemy import SqlAlchemyConversationStore, create_schema
 from inbox_core.triage import TriageClassifier
 
-__all__ = ["LoggingNotifier", "ServiceParts", "build_service", "default_handlers"]
+__all__ = [
+    "LoggingNotifier",
+    "ServiceParts",
+    "build_service",
+    "chatwoot_link",
+    "chatwoot_notifications",
+    "default_handlers",
+]
 
 logger = logging.getLogger("inbox_core.chatwoot")
 
@@ -70,6 +78,24 @@ class LoggingNotifier:
             escalation.tier,
             escalation.reason,
         )
+
+
+def chatwoot_link(settings: ChatwootSettings) -> LinkBuilder:
+    """Links to a conversation in the agent dashboard, where the draft tab is too."""
+    base = f"{settings.chatwoot_origin}/app/accounts/{settings.account_id}/conversations"
+
+    def link(channel: str, thread_key: str, conversation_id: int | None) -> str:
+        return f"{base}/{thread_key}" if thread_key.isdigit() else ""
+
+    return link
+
+
+def chatwoot_notifications(
+    settings: ChatwootSettings, config: ClientConfig, env: Mapping[str, str]
+) -> Notifications | None:
+    """The client's notifier, linking to Chatwoot unless ``notifications.link`` is set."""
+    link = None if config.notifications.link else chatwoot_link(settings)
+    return build_notifications(config, env=env, link=link)
 
 
 @dataclass(frozen=True)
@@ -175,6 +201,7 @@ def build_service(
 
         sink = ChatwootReplySink(api)
         handoff = ChatwootHandOff(api, assignee_id=settings.assignee_id)
+        notifications = chatwoot_notifications(settings, config, source)
         pipeline = Pipeline(
             config=config,
             classifier=classifier,
@@ -184,6 +211,7 @@ def build_service(
             notifier=LoggingNotifier(),
             audit=audit,
             handoff_actions=handoff,
+            notifications=notifications,
             mode_override=mode,
         )
         effective = mode if mode is not None else config.delivery.mode

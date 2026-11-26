@@ -25,6 +25,9 @@ litellm = ["litellm>=1.77.0,<2"]
 jev = ["typesafe-sdk>=0.7.2,<1"]
 sqlalchemy = ["sqlalchemy>=2.0,<3"]
 yaml = ["pyyaml>=6"]
+# Notifications for hand-offs, held drafts and reminders, over any service
+# Apprise supports (https://github.com/caronc/apprise, BSD licence).
+notify = ["apprise>=1.9,<3"]
 # The Chatwoot connection: a small web service, so it is the one extra that
 # brings a web framework. The generated Chatwoot client needs attrs and dateutil.
 chatwoot = [
@@ -44,6 +47,7 @@ dev = [
     "ruff>=0.8",
     "sqlalchemy>=2.0,<3",
     "pyyaml>=6",
+    "apprise>=1.9,<3",
     "types-pyyaml>=6",
     "fastapi>=0.115,<1",
     "uvicorn>=0.30",
@@ -105,7 +109,12 @@ markers = [
     "demo_e2e: needs the demo bundle (deploy/demo); run with -m demo_e2e, see docs/demo.md",
 ]
 xfail_strict = true
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # Apprise's PGP helper imports the standard library's imghdr on Python 3.12,
+    # which warns that it goes away in 3.13; Apprise ships its own shim for that.
+    "ignore:'imghdr' is deprecated:DeprecationWarning",
+]
 
 [tool.coverage.run]
 source = ["inbox_core"]

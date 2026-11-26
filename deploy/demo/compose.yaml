@@ -127,7 +127,7 @@ services:
       context: ../..
       dockerfile: deploy/chatwoot/Dockerfile
       args:
-        EXTRAS: "--extra chatwoot --extra litellm"
+        EXTRAS: "--extra chatwoot --extra litellm --extra notify"
     image: inboxcore/inbox-core:demo
     env_file: .local/service.env
     volumes:

@@ -74,6 +74,47 @@ One deliberate difference, found while deriving the space: the origin compares `
 `derive_tier` treats any non-finite confidence as not confident, and the classifier validators reject it before it gets that far.
 The test `test_nan_is_a_deliberate_difference` pins both behaviours.
 
+### Prices: a per-client setting, decided in code
+
+Rule 1 sends any mention of money to `needs_executive`, so by default "how much is a service?" is never answered.
+`[triage] prices` makes that a per-client choice, with three levels:
+
+| `prices` | A plain price question | Everything else about money |
+|---|---|---|
+| `always_hand_off` (default) | `needs_executive`, never answered | `needs_executive` |
+| `published_prices_only` | triaged like any other message, and answered | `needs_executive` |
+| `draft_for_approval` | triaged like any other message; the reply is held for a person to approve | `needs_executive` |
+
+At every level, the default included, a reply that states a price no passage it cites states is handed off as `needs_executive` (below).
+
+Under the default, the classifier is not asked anything new, its prompt and JSON schema are byte for byte what they were, and a price question is `needs_executive` even if a classifier claims otherwise.
+What does change under the default is the invented-price check: see "Owner decisions" below.
+
+For the other two levels the classifier is asked a fifth question, `asks_listed_price`: is every mention of money only a question about what something usually costs, with no refund, discount, deal, dispute, payment problem, negotiation or custom quote?
+It is a fact about the message, like the other four; `derive_tier` decides what follows.
+`is_price_question` is true only when the client answers prices, the message mentions money and the classifier said yes; only then does rule 1 not escalate it for money, and rules 2 to 4 apply as for any message (so the category must be auto-answerable, the confidence high enough, and so on).
+An executive category stays executive.
+`signals_from_payload` requires the fifth answer as a boolean for such a client and ignores it for everyone else.
+
+The model's discretion ends there.
+After the handler writes the reply and before delivery, the pipeline runs `inbox_core.prices.check_prices` on the reply text against the passages the reply cites (each `Source.passage`, the entry's title and text; never stored or shown):
+
+- A **figure** is an amount (digits with `,` or `.` separators) with a currency marker right before it (`£45`, `$1,200.50`, `USD 30`, `A$12`) or right after it (`45 euros`, `45 EUR`, `50.000đ`, `50p`), with at most one space between.
+  It is stated when the same figure appears in a cited passage: the same marker (case aside, a plural word read as singular), on the same side, with the same digits written the same way.
+  `£45` matches `£45` and `£ 45`, and not `£45.00`, `45 pounds`, `$45`, or the `£45` inside `£450`.
+- A **lone marker** (a currency symbol, code or word not part of a figure, as "pounds" in "forty-five pounds") is stated only when the same marker appears in a cited passage. This is how a price written in words is caught.
+- In a reply to a price question, a **bare number** ("a basic service is 45") is stated only when the same number appears in a cited passage.
+
+Anything unstated is the fail-closed reading, and it is the same at every level: the message is handed off as `needs_executive` with the reason `the reply states a price that no knowledge entry it cites states`, and the reply is never delivered or held.
+The check applies to every reply of every client, not only to price questions: a model that puts a price into an answer about opening hours is caught too.
+Under `draft_for_approval` a reply that passes the check is still held with `a price needs approval` when it answers a price question or states a price.
+The bare-number rule needs a price question, so it never applies under `always_hand_off`, where there are none.
+A handler that cites nothing (a `Template`) cites no price, so a template that states one is handed off; write prices in the knowledge base instead.
+The audit record's tags say `price:stated` or `price:unstated`; the figures themselves are not recorded.
+`tests/test_price_setting.py` drives all three levels through the pipeline, including a generator that invents a price, writes one in words and answers with a bare number, and a non-price answer with an invented price under the default.
+
+The golden set takes `expected_asks_listed_price`, which needs `expected_mentions_money`, and the expected tier is recomputed under the client's own `prices`, so a price case cannot pass validation under the wrong setting.
+
 Reasons produced by `escalation_reason` contain only category names from the table, language codes that match the code pattern, and numbers, so a classifier that returns free text in a field cannot push it into an audit record.
 
 ## Classifiers
@@ -271,6 +312,7 @@ Errors name the setting, the key id and caller-supplied ids, never key material 
 4. Triage: the classifier with bounded retries (default 3 attempts, backoff 0.5 s then 2 s); still unavailable means `needs_admin` with the fallback category.
 5. Handle and deliver: only `auto_answer`, only within the per-conversation reply cap, and only while delivery is not `off`.
 6. Hand off: the holding message (through the same delivery rules), the notifier, then the pause, then `handled`.
+7. Notify: with `notifications`, a finished hand-off or held draft is announced, best effort (see "Notifications").
 
 Decisions are `duplicate`, `left_for_person`, `dropped`, `skipped`, `answered`, `answer_held`, `handed_off` and `incomplete`.
 
@@ -293,6 +335,7 @@ Set `lease_ttl` well above the slowest classifier-plus-handler time, retries inc
 
 Pre-release tables need these columns added: `inbox_conversations.lease_owner` (string 64) and `lease_expires_at` (datetime), and `inbox_messages.held_because` (string 128), `review_outcome` (string 32), `reviewed_by` (string 64) and `reviewed_at` (datetime, indexed).
 `create_schema` creates them for a new database; there is no migration tool in the package.
+The reminder job adds one table, `inbox_reminders` (`key` string 160, primary key, and `created_at`); `create_schema` creates a missing table on an existing database too, so it needs no migration.
 
 ### A person replied
 
@@ -313,16 +356,50 @@ A failed holding message does not stop the hand-off; a holding message or answer
 
 A shared inbox such as Chatwoot can do four things when a person must act: add an internal note only staff see, label the conversation, assign it, and open it in a person's queue.
 `inbox_core.handoff.HandOffActions` is that protocol, passed to the pipeline as `handoff_actions`.
-The pipeline calls it for a hand-off (purpose `hand_off`) and for a drafted reply held for review (purpose `review`), in a fixed order: holding message, note, labels, assign, open, notifier, pause.
+The pipeline calls it for a hand-off (purpose `hand_off`) and for a drafted reply held for review (purpose `review`), in a fixed order: holding message, note, labels, open, assign, notifier, pause.
+The assignment comes after the opening because a shared inbox may not announce an assignment made before: Chatwoot does not notify one made while a conversation is pending, so the older order (assign, then open) told nobody; see "Owner decisions" below.
 After an answer is sent automatically it calls only `add_internal_note` (purpose `answered`), with the answer's sources; see "Sources" above.
 
 - The note, the labels and the assignment are best effort: a failure is logged by exception type and named in the audit record's `handoff_failures`, and the hand-off continues.
-- Opening is what puts the conversation in front of a person, so failing to open fails closed: the message is `incomplete` and retried, and the retry neither repeats the holding message nor counts its own earlier reply against the per-conversation cap.
+- Opening is what puts the conversation in front of a person, so failing to open fails closed: the message is `incomplete` and retried, nothing is assigned, and the retry neither repeats the holding message nor counts its own earlier reply against the per-conversation cap.
 - The note and labels are composed by the core from fixed phrases, category and tier names, source ids and the titles the client gave those entries, and numbers (`handoff_note`, `handoff_labels`), so posting them cannot copy what the visitor wrote.
-- Holding a draft for review does not pause the conversation and does not call the notifier; it is not a hand-off.
+- Holding a draft for review does not pause the conversation and does not call the notifier; it is not a hand-off. With `notifications` it is announced as `draft_held`.
   The draft counts as the conversation's bot reply, so with the default cap of one the next message is handed off.
 
-The audit record holds the channel, thread and message ids, the conversation id, category, tier, confidence, classifier, decision, reason, handler, mode, delivery outcome, the reason a reply was held, source ids, the guard and the handler's tags.
+### Notifications
+
+`notifier` (the `Notifier` protocol) is fail-closed by design: if a person cannot be told of a hand-off, the message is left unhandled and retried.
+That stays as it was.
+`inbox_core.notify` is a second, best-effort way to tell people, for what had no way before: a held draft, and a client with no shared inbox to notify its agents.
+It is off unless the client config has a `[notifications]` section:
+
+```toml
+[notifications]
+urls = ["ntfy://${NTFY_TOKEN}@ntfy.example/shop-alerts", "${INBOX_CORE_NOTIFY_URL}"]
+events = ["hand_off", "draft_held", "reminder"]   # default: hand_off and draft_held
+remind_after_minutes = 60                         # needs the reminder event, and the other way round
+quiet_hours = { start = "22:00", end = "07:00" }  # in delivery.timezone; optional
+link = "https://mail.example/#inbox/{thread_key}" # optional; {channel}, {thread_key}, {conversation_id}
+```
+
+- `urls` are [Apprise](https://github.com/caronc/apprise) URLs (BSD licence; the `notify` extra), so one line reaches any of the services Apprise supports.
+  Every secret goes in a `${VARIABLE}` placeholder, filled from the environment when the notifier is built (`build_notifications`); validation refuses a URL with no placeholder at all, a password written into it, or a secret-named query value written into it, and names a URL by its position, never by what it holds.
+  A variable that is not set stops start-up with its name.
+  The filled-in URLs are kept only inside `adapters.apprise.AppriseTransport`, whose `repr` shows a count.
+- `hand_off` is sent after a hand-off is finished (holding message, notifier, pause, handled); `draft_held` after a held draft is recorded.
+- `reminder`: `run_reminders(store, notifications, config)` finds hand-offs still paused for a person (not `paused_manual`: someone replied) and drafts still `held`, older than `remind_after_minutes`, and reminds about each once.
+  The store records each reminder with an atomic claim (`claim_reminder`, a new `inbox_reminders` table that `create_schema` adds to an older database), so two runners never both send it, and a failed send gives the claim back.
+  `python -m inbox_core.notify --config client.toml --database-url URL` runs it once (and `python -m inbox_core.chatwoot remind` for the Chatwoot service); schedule it every few minutes.
+- `quiet_hours` holds notifications back: nothing is sent, the audit record says `quiet`, and nothing is claimed, so the first reminder run after the quiet hours sends a reminder for anything still waiting. Set a reminder if you use quiet hours.
+
+A notification is built by `Notification` from the event, the organisation's name, the category and tier, the pipeline's reason (cut to one line of 120 characters), a count of minutes and the link.
+It has no field for the sender's text, subject, name, address or phone number, so it cannot carry them; `tests/test_notify.py` drives a message full of a name, an email address and a phone number through every notified path, and through a real Apprise to a JSON endpoint on 127.0.0.1, and finds none of it in what was sent.
+`run_privacy_sweep(..., notifications=transport)` adds a client's own notifications to its sweep.
+
+Failure never changes the reply path: an exception is logged by type, recorded as `notification` in `handoff_failures` and as `<event>:failed` in the audit record's `notifications`, and the reply, hand-off, pause and handled mark are exactly as without a notifier.
+A transport method is `notify_staff`, deliberately not send-shaped: it never reaches the public, and the delivery source-walk test keeps it that way.
+
+The audit record holds the channel, thread and message ids, the conversation id, category, tier, confidence, classifier, decision, reason, handler, mode, delivery outcome, the reason a reply was held, source ids, the guard, the handler's tags, the failed best-effort steps and the notifications attempted (`hand_off:sent`, `draft_held:quiet`, `hand_off:failed`).
 It holds no text, subject or address, and the reasons are built from fixed phrases, category names and numbers.
 
 ### The privacy sweep
@@ -337,6 +414,27 @@ pytest 9 attaches to loggers that are already non-propagating when a test starts
 `tests/test_privacy_sweep.py` shows the sweep catching a logged body, a logged address, content inside a logged traceback, a non-propagating client logger, content smuggled into a handler's reason (which reaches both the notifier and the audit), and an escaped exception.
 
 The sweep is also available as a fixture with `pytest_plugins = ["inbox_core.testing.pytest_plugin"]`.
+
+## Owner decisions
+
+Decisions the owner made on review, recorded here because each changes behaviour a client could see.
+
+### The invented-price check runs for every client (behaviour change)
+
+`check_prices` runs on every reply at every `triage.prices` level, including the default `always_hand_off`.
+Any reply that states a price no passage it cites states is handed off as `needs_executive`, not sent or held.
+This deliberately changes behaviour for existing clients, Vietnam Hearts included: before this version, under the default, an answer that happened to state a price (a model adding "parking is £5", or a client's template naming a fee) was sent; now it goes to a person.
+A price that is written in the entry the answer cites is still sent.
+A `Template` cites no entry, so a template that states a price now always hands off; move the price into the knowledge base.
+The reason is that a wrong price is a commitment the organisation did not make, and the check is cheap and in code.
+
+### The service opens a conversation before assigning it
+
+The hand-off order is note, labels, open, assign (it was assign, then open).
+Chatwoot does not notify an assignment made while a conversation is pending, so with the old order a Chatwoot client's `INBOX_CORE_ASSIGNEE_ID` was assigned silently and nobody was told.
+Assigning is still best effort, and nothing is assigned when the opening fails.
+The seed's automation rule stays as the alternative for a client that wants Chatwoot to choose the assignee; when both are configured the service's assignee wins, through the `inbox-core-assigns` label (see [chatwoot.md](chatwoot.md), "Telling a person").
+The cost: with inbox auto-assignment on and an agent online, Chatwoot assigns that agent as the conversation opens and the service then reassigns it, so two people are notified; such a client should turn auto-assignment off.
 
 ## Evaluation
 

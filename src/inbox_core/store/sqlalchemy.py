@@ -1,6 +1,7 @@
 """A SQLAlchemy :class:`inbox_core.store.ConversationStore`. Needs ``inbox-core[sqlalchemy]``.
 
-Two tables, ``inbox_conversations`` and ``inbox_messages``, created with
+Three tables, ``inbox_conversations``, ``inbox_messages`` and
+``inbox_reminders`` (which reminders were sent), created with
 :func:`create_schema` or by your own migrations from :data:`metadata`. Every
 method runs in its own transaction and commits before it returns, which is
 what makes "record the inbound row, then act" safe across a crash.
@@ -30,6 +31,7 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    delete,
     func,
     insert,
     or_,
@@ -109,8 +111,16 @@ messages = Table(
 )
 
 
+reminders = Table(
+    "inbox_reminders",
+    metadata,
+    Column("key", String(160), primary_key=True),
+    Column("created_at", DateTime, nullable=False),
+)
+
+
 def create_schema(engine: Engine) -> None:
-    """Create the two tables if they do not exist."""
+    """Create the tables that do not exist yet (an older database gains ``inbox_reminders``)."""
     metadata.create_all(engine)
 
 
@@ -615,3 +625,46 @@ class SqlAlchemyConversationStore:
         owned = select(conversations.c.id).where(conversations.c.sender_key == sender_key)
         with self._engine.begin() as connection:
             return self._erase(connection, messages.c.conversation_id.in_(owned))
+
+    def held_before(self, before: datetime) -> tuple[StoredMessage, ...]:
+        """Held outbound replies created before ``before``, oldest first."""
+        query = (
+            select(messages)
+            .where(
+                messages.c.direction == "outbound",
+                messages.c.action == "held",
+                messages.c.created_at < as_naive_utc(before),
+            )
+            .order_by(messages.c.id)
+        )
+        with self._engine.connect() as connection:
+            return tuple(_message(row) for row in connection.execute(query).mappings())
+
+    def paused_before(self, before: datetime) -> tuple[Conversation, ...]:
+        """Conversations paused after a hand-off since before ``before``, oldest first."""
+        query = (
+            select(conversations)
+            .where(
+                conversations.c.status == "paused_handoff",
+                conversations.c.updated_at < as_naive_utc(before),
+            )
+            .order_by(conversations.c.updated_at, conversations.c.id)
+        )
+        with self._engine.connect() as connection:
+            return tuple(_conversation(row) for row in connection.execute(query).mappings())
+
+    def claim_reminder(self, key: str) -> bool:
+        """Claim ``key`` with one insert; False if the row already exists."""
+        if not key or len(key) > 160:
+            raise ValueError("a reminder key must be 1 to 160 characters")
+        try:
+            with self._engine.begin() as connection:
+                connection.execute(insert(reminders).values(key=key, created_at=self._now()))
+        except IntegrityError:
+            return False
+        return True
+
+    def release_reminder(self, key: str) -> None:
+        """Delete the claim for ``key``."""
+        with self._engine.begin() as connection:
+            connection.execute(delete(reminders).where(reminders.c.key == key))

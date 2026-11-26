@@ -141,6 +141,38 @@ class TestSink:
         assert fake.writes == []
 
 
+class TestTheAssignsLabel:
+    def request(self, purpose: str = "hand_off") -> HandOffRequest:
+        return HandOffRequest(
+            purpose,  # type: ignore[arg-type]
+            "chatwoot",
+            "4",
+            "m",
+            None,
+            "x",
+            "needs_admin",
+            "r",
+            ("handoff",),
+            "n",
+        )
+
+    def actions(self, fake: FakeChatwoot, assignee: int | None) -> ChatwootHandOff:
+        from inbox_core.chatwoot.api import ChatwootApi
+        from tests.chatwoot.fake import BOT_TOKEN
+
+        api = ChatwootApi("http://c.test", 1, BOT_TOKEN, transport=fake.transport())
+        return ChatwootHandOff(api, assignee_id=assignee)
+
+    def test_it_is_added_only_when_this_service_assigns(self) -> None:
+        with_assignee, without = FakeChatwoot(), FakeChatwoot()
+        for fake in (with_assignee, without):
+            fake.conversation(4)
+        self.actions(with_assignee, 5).add_labels(self.request())
+        self.actions(without, None).add_labels(self.request())
+        assert with_assignee.conversations[4]["labels"] == ["handoff", "inbox-core-assigns"]
+        assert without.conversations[4]["labels"] == ["handoff"]
+
+
 class TestWiring:
     def test_an_unknown_classifier_is_refused(self, tmp_path: Path) -> None:
         with pytest.raises(SettingsError, match="INBOX_CORE_CLASSIFIER"):

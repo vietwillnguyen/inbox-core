@@ -8,7 +8,10 @@ LiteLLM adapters make, in the shape they expect:
   The reply is the JSON object the triage schema asks for, chosen by ordered
   keyword rules read from a TOML file. A message no rule matches is reported
   as the fallback category with a confidence below any sensible threshold, so
-  it reaches a person, as an unsure model's answer would.
+  it reaches a person, as an unsure model's answer would. When the classifier
+  asks the fifth question (``asks_listed_price``, for a client whose
+  ``triage.prices`` answers prices), it answers yes when a ``listed_price``
+  pattern matches and no ``unlisted_price`` pattern does.
 - **Grounded answers** (:class:`inbox_core.adapters.litellm.LiteLLMGenerator`):
   the system message ends with ``Context:`` and the retrieved passages. The
   reply is the first passage's text, verbatim, or the refusal sentinel when
@@ -44,8 +47,11 @@ _KEYS = {
     "other_language",
     "asks_for_human",
     "mentions_money",
+    "listed_price",
+    "unlisted_price",
     "rules",
 }
+_ASKS_LISTED_PRICE = "asks_listed_price:"
 
 
 class StandInError(ValueError):
@@ -80,6 +86,8 @@ class StandInModel:
     other_language: tuple[re.Pattern[str], ...] = ()
     asks_for_human: tuple[re.Pattern[str], ...] = ()
     mentions_money: tuple[re.Pattern[str], ...] = ()
+    listed_price: tuple[re.Pattern[str], ...] = ()
+    unlisted_price: tuple[re.Pattern[str], ...] = ()
 
     @classmethod
     def from_file(cls, path: str | Path) -> StandInModel:
@@ -123,6 +131,8 @@ class StandInModel:
             other_language=_patterns(data.get("other_language", []), "other_language"),
             asks_for_human=_patterns(data.get("asks_for_human", []), "asks_for_human"),
             mentions_money=_patterns(data.get("mentions_money", []), "mentions_money"),
+            listed_price=_patterns(data.get("listed_price", []), "listed_price"),
+            unlisted_price=_patterns(data.get("unlisted_price", []), "unlisted_price"),
         )
 
     def complete(self, messages: Sequence[Mapping[str, Any]]) -> str:
@@ -136,10 +146,10 @@ class StandInModel:
         )
         if _CONTEXT in system:
             return self.answer(system.split(_CONTEXT, 1)[1])
-        return json.dumps(self.classify(user))
+        return json.dumps(self.classify(user, asks_price=_ASKS_LISTED_PRICE in system))
 
-    def classify(self, user_content: str) -> dict[str, object]:
-        """The triage signals for one classifier input."""
+    def classify(self, user_content: str, *, asks_price: bool = False) -> dict[str, object]:
+        """The triage signals for one classifier input; ``asks_price`` adds the fifth."""
         try:
             shown = json.loads(user_content)
         except json.JSONDecodeError:
@@ -153,13 +163,18 @@ class StandInModel:
             if _any(patterns, text):
                 category, confidence = name, self.confidence
                 break
-        return {
+        found: dict[str, object] = {
             "category": category,
             "language": "other" if _any(self.other_language, text) else self.language,
             "confidence": confidence,
             "asks_for_human": _any(self.asks_for_human, text),
             "mentions_money_or_commitment": _any(self.mentions_money, text),
         }
+        if asks_price:
+            found["asks_listed_price"] = _any(self.listed_price, text) and not _any(
+                self.unlisted_price, text
+            )
+        return found
 
     @staticmethod
     def answer(context: str) -> str:

@@ -341,10 +341,13 @@ class ChatwootService:
                 f"Reason: {failure[:120] or 'unknown'}."
             ),
         )
+        # The same order as the pipeline's hand-off: open, then assign, so
+        # Chatwoot notifies the assignee.
         for step in (
             self._handoff.add_internal_note,
             self._handoff.add_labels,
             self._handoff.open_for_person,
+            self._handoff.assign,
         ):
             try:
                 step(request)

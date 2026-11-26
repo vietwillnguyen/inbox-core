@@ -2,7 +2,9 @@
 # One command to stand up a client's Chatwoot (Community Edition, pinned) and
 # the inbox-core service:   ./deploy/chatwoot/stack.sh up
 #
-# Every docker command is scoped to the compose project "inboxcore"; nothing
+# Every docker command is scoped to the compose project "inboxcore" (or
+# STACK_PROJECT, with CHATWOOT_PORT, DEMO_PORT and SERVICE_PORT, for a second
+# copy on one machine; the end-to-end suite reads them from .local/stack.env); nothing
 # here touches any other container, volume or network.
 #
 #   up                 write local secrets if missing, start everything, seed, wait
@@ -17,7 +19,9 @@
 #   destroy            stop and delete this project's volumes (asks first)
 set -euo pipefail
 cd "$(dirname "$0")"
-COMPOSE=(docker compose -p inboxcore -f compose.yaml)
+PROJECT=${STACK_PROJECT:-inboxcore}
+case "$PROJECT" in *[!a-z0-9_-]*|'') echo "STACK_PROJECT must be lowercase letters, digits, - and _" >&2; exit 1 ;; esac
+COMPOSE=(docker compose -p "$PROJECT" -f compose.yaml)
 CHATWOOT_PORT=${CHATWOOT_PORT:-3910}
 DEMO_PORT=${DEMO_PORT:-3911}
 SERVICE_PORT=${SERVICE_PORT:-3912}
@@ -34,6 +38,7 @@ hex() { python3 -c "import secrets,sys; print(secrets.token_hex(int(sys.argv[1])
 write_secrets() {
   mkdir -p .local/demo
   umask 077
+  printf 'STACK_PROJECT=%s\nCHATWOOT_PORT=%s\nSERVICE_PORT=%s\n' "$PROJECT" "$CHATWOOT_PORT" "$SERVICE_PORT" > .local/stack.env
   if [ ! -f .local/chatwoot.env ]; then
     local pg rd
     pg=$(hex 16); rd=$(hex 16)
@@ -108,6 +113,7 @@ seed() {
     -e BOT_OUTGOING_URL="http://inbox-core:8000/chatwoot/webhook/${INBOX_CORE_WEBHOOK_PATH_TOKEN}" \
     -e DASHBOARD_APP_URL="${SERVICE_ORIGIN}/tab" \
     -e WIDGET_ORIGIN="${WIDGET_ORIGIN}" -e FALLBACK_TEXT="${fallback}" \
+    -e HANDOFF_ASSIGNEE_EMAIL="${CHATWOOT_ADMIN_EMAIL}" \
     rails bundle exec rails runner - < seed.rb | grep -E '^CHATWOOT_[A-Z_]+=' > .local/tokens.env.new
   mv .local/tokens.env.new .local/tokens.env
   write_service_env
@@ -131,6 +137,10 @@ INBOX_CORE_TAB_SECRET=${INBOX_CORE_TAB_SECRET}
 INBOX_CORE_ENCRYPTION_KEYS=${INBOX_CORE_ENCRYPTION_KEYS}
 INBOX_CORE_DATABASE_URL=sqlite:////data/inbox-core.db
 INBOX_CORE_AUDIT_PATH=/data/audit.jsonl
+# Both ways of assigning a hand-off are configured, to different people: the
+# service assigns the volunteer, and the seed's rule (which would assign the
+# administrator) stands down for a conversation the service assigns. The
+# end-to-end suite checks that exactly one of them is notified.
 INBOX_CORE_ASSIGNEE_ID=${CHATWOOT_AGENT_USER_ID}
 INBOX_CORE_CLASSIFIER=${INBOX_CORE_CLASSIFIER:-example-keywords}
 INBOX_CORE_CONFIG=/config/client.toml
@@ -183,7 +193,7 @@ case "${1:-help}" in
   status) "${COMPOSE[@]}" ps ;;
   down) "${COMPOSE[@]}" stop ;;
   destroy)
-    read -r -p "Delete the inboxcore project's containers and volumes? [y/N] " answer
+    read -r -p "Delete the ${PROJECT} project's containers and volumes? [y/N] " answer
     [ "$answer" = "y" ] && "${COMPOSE[@]}" down -v
     ;;
   *) sed -n '2,20p' "$0" ;;

@@ -3,17 +3,22 @@
 When the pipeline hands a message to a person, or holds a drafted reply for a
 person to review, a shared inbox such as Chatwoot has four things it can do
 about it: post an internal note that only staff see, label the conversation,
-assign it to someone, and open it so it shows up in a person's queue.
+open it so it shows up in a person's queue, and assign it to someone.
 :class:`HandOffActions` is that protocol, and the pipeline calls it in that
-order, after any holding message and before the notifier:
+order (note, labels, open, assign), after any holding message and before the
+notifier:
 
-1. ``add_internal_note``, ``add_labels`` and ``assign`` are best effort. A
-   failure is logged by exception type, recorded in the audit record's
+1. ``add_internal_note`` and ``add_labels`` are best effort. A failure is
+   logged by exception type, recorded in the audit record's
    ``handoff_failures``, and does not stop the hand-off.
 2. ``open_for_person`` is the step that puts the conversation in front of a
    person, so a failure there fails closed: the message is left unhandled
    (``incomplete``) and retried, and the retry does not repeat a holding
    message or a draft that was already delivered.
+3. ``assign`` comes after the opening and is best effort like the first two.
+   It is last because a shared inbox may not tell anyone about an assignment
+   made before the conversation is open: Chatwoot does not notify one made
+   while a conversation is still pending, so assigning first was silent.
 
 Everything a :class:`HandOffRequest` carries is built by the core from fixed
 phrases, category and tier names, knowledge entry ids and the titles the
@@ -57,7 +62,7 @@ HandOffPurpose = Literal["hand_off", "review", "answered"]
 """Why the inbox is told: the message is a person's, a draft awaits review, or
 an answer was sent (``answered`` posts only the staff note of its sources)."""
 
-HANDOFF_STEPS = ("add_internal_note", "add_labels", "assign", "open_for_person")
+HANDOFF_STEPS = ("add_internal_note", "add_labels", "open_for_person", "assign")
 """The order the pipeline calls the steps in."""
 
 HANDOFF_LABEL = "handoff"

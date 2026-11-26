@@ -39,7 +39,7 @@ Three host names point at the server:
 
 inbox-core's webhook, `/healthz` and `/metrics`, and the gateway are reachable only inside the compose network.
 
-The shop's configuration, knowledge base (thirty entries), golden set and stand-in rules are in `deploy/demo/client/`.
+The shop's configuration, knowledge base (thirty-two entries, two of them made-up price lists), golden set and stand-in rules are in `deploy/demo/client/`.
 Everything about the shop is invented; nothing describes a real business, place or person.
 
 ## How it behaves
@@ -51,9 +51,17 @@ Everything about the shop is invented; nothing describes a real business, place 
   An answer from an entry without a page has no line; see "Sources" in [design.md](design.md).
 - Repair advice (`repair_advice`) is drafted and held: the owner sends, edits or discards it from the `inbox-core drafts` tab in the dashboard, and the visitor sees nothing until then (`delivery.approval_categories`).
   The held draft already ends with its link line, so the owner reviews exactly what the visitor will get.
-- Bookings, questions about an order, refunds, complaints, safety, press, anything that mentions money, anything unsure and anything off-topic get the shop's holding message, which says this is a demo, and the conversation is opened for a person with a staff note saying why.
+- A question about a listed price is answered: the shop sets `triage.prices = "published_prices_only"`, and its knowledge base lists made-up prices (a basic service £45, a full service £120, a puncture repair £12, a fitting £60, and day and week rental rates).
+  "How much does a basic service cost?" gets the price list entry and a link to its page (`More: https://quillmoor-cycles.example/prices`).
+  The core checks in code that every price in the answer is written in the entry it cites; an answer with any other price (a model that rounds, works one out or invents one) goes to a person instead, as `needs_executive`.
+  See "Prices" in [design.md](design.md) for exactly how the check works.
+- Discounts, haggling ("would you do it for £30?"), refunds, deposits, disputes and custom quotes are not price questions: they get the holding message and go to a person, as before.
+- Bookings, questions about an order, complaints, safety, press, anything unsure and anything off-topic get the shop's holding message, which says this is a demo, and the conversation is opened for a person with a staff note saying why.
+- Chatwoot tells the owner: every hand-off and held draft that nobody has is assigned to the owner once it is open, and Chatwoot notifies them of the assignment (in the dashboard's notifications, and by email or push where those are set up).
+  This is Chatwoot's own automation rule and assignment notifications, set up by the seed; the bundle does not set `INBOX_CORE_ASSIGNEE_ID`, the other way to do it; see "Telling a person" in [chatwoot.md](chatwoot.md).
+- The inbox has the shop's business hours (Tuesday to Friday 8am to 6pm, Saturday 9am to 4pm, UK time).
+  A visitor who writes while the shop is closed gets Chatwoot's out-of-office message once a day, saying when a person will be back, and the assistant still answers what it can.
 - The tier is decided in code from the shop's category table, so a message telling the assistant to ignore its instructions has nothing to change.
-- Every price question goes to a person, because the core escalates any message that mentions money (see [Open questions](#open-questions)).
 
 ## Sizing
 
@@ -196,7 +204,8 @@ Behind the tunnel every request reaches the proxy from cloudflared, so the rate 
 Repair advice waits in the dashboard with the `draft-pending` label.
 Open the conversation and its `inbox-core drafts` tab; sign in to the tab once per session with your personal access token (avatar, Profile settings, Access token).
 Send, edit and send, or discard; a staff note records who did what.
-Nobody else is notified: a draft no one approves is never sent, and the reset deletes it with its conversation.
+Chatwoot assigns the held draft to the owner and notifies them (see [How it behaves](#how-it-behaves)); a draft no one approves is never sent, and the reset deletes it with its conversation.
+The bundle sets up no email server, so the notification is the dashboard's own (the bell, and the browser's push notifications if the owner allows them); to have it emailed, give Chatwoot SMTP settings (`SMTP_*` and `MAILER_SENDER_EMAIL` in its environment).
 
 ### The spend cap
 
@@ -286,10 +295,11 @@ DEMO_RATE_CONTACTS_PER_HOUR=600 DEMO_RATE_CONTACTS_BURST=60 ./deploy/demo/demo.s
 uv run pytest -m demo_e2e tests/demo_e2e
 ```
 
+A bundle brought up under another `DEMO_PROJECT` is found by the suite from `.local/bundle.env`; export the same `DEMO_PROJECT` and binds when running it, because the reset and smoke tests call `demo.sh` again.
 It is marked `demo_e2e`, which the default run deselects, and skips itself if the bundle is not up; CI runs it on every push.
 It posts more than one visitor would from one address, so it runs with raised rate limits and checks that the raised limit holds.
 Everything a visitor or the owner does goes through the proxy.
-It covers: a grounded answer reached through the gateway, ending with its public link and with no source id or title shown to the visitor, and its sources in a private note and the audit record; the smoke test itself; off-topic questions, a booking and a prompt-injection refund demand passed to a person with the holding message; repair advice held with its link line, then sent edited from the tab, and another discarded; what is stored on a contact; uploads refused; which routes are public; the widget's embedding policy; sign-up closed; the reset deleting old conversations and contacts and keeping recent ones; the spend cap failing closed once spent; no visitor text in any container's log; and the rate limit.
+It covers: a listed price answered with its page, and a discount and a haggle passed to a person; a hand-off and a held draft assigned to the owner by Chatwoot's rule, each with an assignment notification, and an answered question assigned to nobody; the inbox's business hours, the out-of-office message once a day while closed (with the assistant still answering) and none while open; a grounded answer reached through the gateway, ending with its public link and with no source id or title shown to the visitor, and its sources in a private note and the audit record; the smoke test itself; off-topic questions, a booking and a prompt-injection refund demand passed to a person with the holding message; repair advice held with its link line, then sent edited from the tab, and another discarded; what is stored on a contact; uploads refused; which routes are public; the widget's embedding policy; sign-up closed; the reset deleting old conversations and contacts and keeping recent ones; the spend cap failing closed once spent; no visitor text in any container's log; and the rate limit.
 
 ### The stand-in model
 
@@ -299,6 +309,6 @@ It is not accurate; it classifies the shop's golden set correctly, which the uni
 
 ## Open questions
 
-- **Prices.** The core sends every message that mentions money to `needs_executive`, so "how much is a service?" is never answered automatically. That is right for the nonprofit the core came from and limiting for a shop; whether the money rule should be configurable per category is a decision for the core, not for this bundle.
+- **Prices on the real model.** The stand-in classifies the price cases in the golden set correctly; whether Gemini tells a plain price question from a discount or a custom quote as reliably is unmeasured until the triage runner is pointed at it.
 - **The "what it decided" panel and a bot check** from the plan's phase 3 are not built. The panel needs a way to tie the widget's conversation to its audit records without exposing other visitors' decisions; a bot check (such as Turnstile) needs a site key and cannot stop a script calling the widget's API directly.
-- **Notifications.** A hand-off or a held draft only opens the conversation in the dashboard; nobody is pinged.
+- **Notifications outside Chatwoot.** The core's Apprise notifier (`[notifications]`, see [design.md](design.md)) is not turned on in the demo, because the demo has nowhere real to send to; Chatwoot's own notifications cover the owner.

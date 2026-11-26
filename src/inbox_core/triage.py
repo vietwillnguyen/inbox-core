@@ -2,15 +2,21 @@
 
 A classifier is asked only what a classifier can be trusted with: what the
 message is about, what language it is in, whether the writer asked for a
-person, and whether money or a commitment is mentioned. It is never asked what
-to do. :func:`derive_tier` decides that, from the client's category table,
+person, and whether money or a commitment is mentioned (and, for a client that
+answers prices, whether that mention is only a question about a usual price).
+It is never asked what to do. :func:`derive_tier` decides that, from the client's category table,
 because the consequence of a wrong tier on a sensitive message is not a quality
 problem.
 
 The four rules, in this order, and the order is the design:
 
 1. An executive category, or any mention of money or a commitment, is
-   ``needs_executive``. First, so nothing below can talk it down.
+   ``needs_executive``. First, so nothing below can talk it down. The one
+   exception is a client's own choice: with ``triage.prices`` set to anything
+   but ``always_hand_off``, a message whose only money is a question about a
+   usual price (:func:`is_price_question`) is not escalated by this rule; it
+   is triaged by the rules below like any other, and the pipeline checks the
+   reply's prices in code before anything is delivered.
 2. Otherwise a skipped category (``automated``) is ``skip``, whatever the
    confidence and even if the text "asks for a person": an auto-responder
    saying "contact my colleague" must not start a loop.
@@ -47,6 +53,7 @@ __all__ = [
     "derive_tier",
     "escalation_reason",
     "is_confident",
+    "is_price_question",
     "signals_from_payload",
 ]
 
@@ -73,7 +80,13 @@ class TriageUnavailable(RuntimeError):  # noqa: N818 - the established name clie
 
 @dataclass(frozen=True)
 class TriageSignals:
-    """What a classifier reports. No tier, deliberately."""
+    """What a classifier reports. No tier, deliberately.
+
+    ``asks_listed_price`` is asked only of a client whose ``triage.prices``
+    answers prices: every mention of money in the message is a question about
+    what something usually costs, with no refund, discount, dispute,
+    negotiation or custom quote. It is false for everyone else.
+    """
 
     category: str
     language: str
@@ -81,10 +94,11 @@ class TriageSignals:
     asks_for_human: bool
     mentions_money_or_commitment: bool
     classifier: str
+    asks_listed_price: bool = False
 
     def as_record(self) -> dict[str, object]:
         """A JSON-ready form holding categories, codes and numbers only."""
-        return {
+        record: dict[str, object] = {
             "category": self.category,
             "language": self.language,
             "confidence": round(float(self.confidence), 4),
@@ -92,6 +106,9 @@ class TriageSignals:
             "mentions_money_or_commitment": bool(self.mentions_money_or_commitment),
             "classifier": self.classifier,
         }
+        if self.asks_listed_price:
+            record["asks_listed_price"] = True
+        return record
 
 
 @dataclass(frozen=True)
@@ -109,6 +126,7 @@ class TriageDecision(TriageSignals):
             asks_for_human=self.asks_for_human,
             mentions_money_or_commitment=self.mentions_money_or_commitment,
             classifier=self.classifier,
+            asks_listed_price=self.asks_listed_price,
         )
 
     def with_tier(self, tier: Tier) -> TriageDecision:
@@ -136,12 +154,24 @@ def is_confident(confidence: float, policy: TriagePolicy) -> bool:
     return threshold is not None and math.isfinite(confidence) and confidence >= threshold
 
 
+def is_price_question(signals: TriageSignals, policy: TriagePolicy) -> bool:
+    """Whether the money this message mentions is only a usual-price question the client answers.
+
+    Never true under ``triage.prices = "always_hand_off"``, so for such a
+    client every mention of money stays ``needs_executive``.
+    """
+    return (
+        policy.answers_prices
+        and bool(signals.mentions_money_or_commitment)
+        and signals.asks_listed_price is True
+    )
+
+
 def derive_tier(signals: TriageSignals, policy: TriagePolicy) -> Tier:
     """Which tier handles this message. Pure, deterministic, never chosen by a model."""
     rule = policy.category(signals.category)
-    if (rule is not None and rule.escalates_to == "needs_executive") or (
-        signals.mentions_money_or_commitment
-    ):
+    money = signals.mentions_money_or_commitment and not is_price_question(signals, policy)
+    if (rule is not None and rule.escalates_to == "needs_executive") or money:
         return "needs_executive"
 
     if rule is not None and rule.escalates_to == "skip":
@@ -168,6 +198,7 @@ def decide(signals: TriageSignals, policy: TriagePolicy) -> TriageDecision:
         asks_for_human=signals.asks_for_human,
         mentions_money_or_commitment=signals.mentions_money_or_commitment,
         classifier=signals.classifier,
+        asks_listed_price=signals.asks_listed_price,
         tier=derive_tier(signals, policy),
     )
 
@@ -180,7 +211,7 @@ def escalation_reason(signals: TriageSignals, policy: TriagePolicy) -> str:
     """
     if signals.category in policy.executive_categories:
         return f"executive category {signals.category}"
-    if signals.mentions_money_or_commitment:
+    if signals.mentions_money_or_commitment and not is_price_question(signals, policy):
         return "mentions money or a commitment"
     if signals.asks_for_human:
         return "the sender asked for a person"
@@ -196,6 +227,7 @@ def escalation_reason(signals: TriageSignals, policy: TriagePolicy) -> str:
 
 
 _SIGNAL_FLAGS = ("asks_for_human", "mentions_money_or_commitment")
+_PRICE_FLAG = "asks_listed_price"
 
 
 def signals_from_payload(
@@ -203,7 +235,9 @@ def signals_from_payload(
 ) -> TriageSignals:
     """Validate a classifier's raw answer against the client's table, or raise.
 
-    Shared by every adapter so they refuse the same things. A category outside
+    Shared by every adapter so they refuse the same things. ``asks_listed_price``
+    is required, and read, only when the client's ``triage.prices`` answers
+    prices. A category outside
     the table is a malformed answer, not a new category: mapping it to a
     default would let a model typo choose a tier. Exception messages carry the
     message id and the field name, never the offending value, because a model
@@ -232,7 +266,8 @@ def signals_from_payload(
     if not math.isfinite(confidence):
         raise TriageUnavailable(f"{classifier} returned a non-finite confidence for {message_id}")
 
-    for name in _SIGNAL_FLAGS:
+    flags = (*_SIGNAL_FLAGS, _PRICE_FLAG) if policy.answers_prices else _SIGNAL_FLAGS
+    for name in flags:
         if not isinstance(payload.get(name), bool):
             raise TriageUnavailable(f"{classifier} returned a non-boolean {name} for {message_id}")
 
@@ -243,6 +278,8 @@ def signals_from_payload(
         asks_for_human=payload["asks_for_human"],
         mentions_money_or_commitment=payload["mentions_money_or_commitment"],
         classifier=classifier,
+        # Read only when the client answers prices; otherwise never asked, never trusted.
+        asks_listed_price=bool(payload.get(_PRICE_FLAG)) if policy.answers_prices else False,
     )
 
 

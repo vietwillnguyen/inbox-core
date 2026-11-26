@@ -112,21 +112,24 @@ class TestAnswering:
         stack.webhook(message_payload(10, 200, QUESTION))
         assert stack.audit.records[-1].category == "damage_report"
 
-    def test_a_sensitive_message_is_handed_off_labelled_assigned_and_opened(
+    def test_a_sensitive_message_is_handed_off_labelled_opened_then_assigned(
         self, stack: Stack
     ) -> None:
         stack.visitor_says(11, 201, DAMAGE)
         writes = [(kind, body) for kind, cid, body in stack.chatwoot.writes if cid == 11]
         kinds = [kind for kind, _ in writes]
-        assert kinds == ["labels", "message", "message", "labels", "assign", "status"]
+        # Opened before it is assigned: Chatwoot does not notify an assignment
+        # made while a conversation is still pending.
+        assert kinds == ["labels", "message", "message", "labels", "status", "assign"]
         assert writes[0][1] == ["inbox-core"]
         assert writes[1][1]["private"] is False
         assert "A volunteer will read your message" in writes[1][1]["content"]
         assert writes[2][1]["private"] is True
         assert "Category: damage_report. Tier: needs_executive." in writes[2][1]["content"]
-        assert writes[3][1] == ["inbox-core", "handoff", "damage_report"]
-        assert writes[4][1] == 5
-        assert writes[5][1] == "open"
+        # inbox-core-assigns tells the seed's hand-off rule that this service assigns.
+        assert writes[3][1] == ["inbox-core", "handoff", "damage_report", "inbox-core-assigns"]
+        assert writes[4][1] == "open"
+        assert writes[5][1] == 5
         assert last_decision(stack) == "handed_off"
 
     def test_labels_are_added_to_the_existing_ones(self, stack: Stack) -> None:
@@ -138,6 +141,7 @@ class TestAnswering:
             "inbox-core",
             "handoff",
             "damage_report",
+            "inbox-core-assigns",
         ]
 
     def test_every_processed_conversation_is_labelled_once(self, stack: Stack) -> None:
@@ -340,8 +344,13 @@ class TestWhenTheCoreCannotFinish:
             "inbox-core",
             "handoff",
             "inbox-core-unavailable",
+            "inbox-core-assigns",
         ]
         assert stack.chatwoot.conversations[16]["status"] == "open"
+        assert [kind for kind, cid, _ in stack.chatwoot.writes if cid == 16][-2:] == [
+            "status",
+            "assign",
+        ]
         assert metrics(stack)["processed"] == {"fallback": 1}
         # A second failing message in the same conversation does not repeat it.
         stack.visitor_says(16, 2, QUESTION)

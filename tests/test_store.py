@@ -390,3 +390,69 @@ def test_a_conversation_created_concurrently_is_read_not_duplicated(
     assert store.conversation_for("web", "t1", "k").id == conversation.id
     rival.dispose()
     store.close()
+
+
+class TestWaitingForAPerson:
+    """What the reminder job reads: held drafts and hand-offs still waiting, and claims."""
+
+    def held_draft(self, store: Any, **kwargs: Any) -> Any:
+        conversation, row = inbound(store, **kwargs)
+        outbound = store.begin_outbound(
+            conversation.id, reply_to_id=row.id, kind="grounded_answer", language="en", text="x"
+        )
+        store.finish_outbound(outbound.id, action="held", provider_ref=None, held_because="why")
+        return store.get_message(outbound.id)
+
+    def test_held_drafts_older_than_the_bound_are_listed(self, store: Any, clock: Clock) -> None:
+        first = self.held_draft(store, message_id="m1", thread="t1")
+        clock.now += timedelta(minutes=30)
+        self.held_draft(store, message_id="m2", thread="t2")
+        listed = store.held_before(clock.now - timedelta(minutes=10))
+        assert [m.id for m in listed] == [first.id]
+
+    def test_a_resolved_draft_is_not_listed(self, store: Any, clock: Clock) -> None:
+        draft = self.held_draft(store)
+        assert store.claim_held(draft.id)
+        clock.now += timedelta(hours=1)
+        assert store.held_before(clock.now) == ()
+
+    def test_hand_offs_still_paused_are_listed_and_a_person_replying_ends_it(
+        self, store: Any, clock: Clock
+    ) -> None:
+        first, _ = inbound(store, message_id="m1", thread="t1")
+        second, _ = inbound(store, message_id="m2", thread="t2")
+        store.pause(first.id, "needs_admin: the sender asked for a person")
+        store.pause(second.id, "needs_admin: the sender asked for a person")
+        clock.now += timedelta(hours=1)
+        assert [c.id for c in store.paused_before(clock.now)] == [first.id, second.id]
+        store.pause_manual(second.id)
+        assert [c.id for c in store.paused_before(clock.now)] == [first.id]
+        assert store.paused_before(clock.now - timedelta(hours=2)) == ()
+
+    def test_an_aware_bound_is_compared_in_utc(self, store: Any, clock: Clock) -> None:
+        conversation, _ = inbound(store)
+        store.pause(conversation.id, "needs_admin: x")
+        later = (clock.now + timedelta(minutes=5)).astimezone(ZoneInfo("Asia/Ho_Chi_Minh"))
+        assert [c.id for c in store.paused_before(later)] == [conversation.id]
+
+    def test_a_reminder_is_claimed_once_until_released(self, store: Any) -> None:
+        assert store.claim_reminder("draft:1") is True
+        assert store.claim_reminder("draft:1") is False
+        assert store.claim_reminder("draft:2") is True
+        store.release_reminder("draft:1")
+        assert store.claim_reminder("draft:1") is True
+
+    def test_a_reminder_key_is_bounded(self, store: Any) -> None:
+        with pytest.raises(ValueError, match="160"):
+            store.claim_reminder("k" * 161)
+
+    def test_a_claim_holds_across_two_stores_on_one_database(self, tmp_path: Path) -> None:
+        clock = Clock()
+        one = build("sqlalchemy", tmp_path, clock)
+        two = build("sqlalchemy", tmp_path, clock)
+        try:
+            assert one.claim_reminder("hand_off:1:x") is True
+            assert two.claim_reminder("hand_off:1:x") is False
+        finally:
+            one.close()
+            two.close()

@@ -32,13 +32,17 @@ Q_CATEGORY = "category"
 Q_LANGUAGE = "language"
 Q_ASKS_FOR_HUMAN = "asks_for_human"
 Q_MONEY = "mentions_money_or_commitment"
+Q_LISTED_PRICE = "asks_listed_price"
 
 
 def build_questions(config: ClientConfig) -> dict[str, Any]:
-    """The four questions as plain dictionaries, rendered from the client config."""
+    """The questions as plain dictionaries, rendered from the client config.
+
+    Four, and a fifth (``asks_listed_price``) for a client that answers prices.
+    """
     prompts = render_triage_prompts(config)
     policy = config.triage
-    return {
+    questions: dict[str, Any] = {
         Q_CATEGORY: {
             "type": "choice",
             "instructions": prompts.category,
@@ -52,6 +56,9 @@ def build_questions(config: ClientConfig) -> dict[str, Any]:
         Q_ASKS_FOR_HUMAN: {"type": "noul", "instructions": prompts.asks_for_human},
         Q_MONEY: {"type": "noul", "instructions": prompts.money},
     }
+    if policy.answers_prices:
+        questions[Q_LISTED_PRICE] = {"type": "noul", "instructions": prompts.listed_price}
+    return questions
 
 
 class JevClassifier:
@@ -101,6 +108,8 @@ class JevClassifier:
                 "asks_for_human": float(nouls[Q_ASKS_FOR_HUMAN].noul) >= NOUL_TRUE_AT,
                 "mentions_money_or_commitment": float(nouls[Q_MONEY].noul) >= NOUL_TRUE_AT,
             }
+            if Q_LISTED_PRICE in self._questions:
+                payload[Q_LISTED_PRICE] = float(nouls[Q_LISTED_PRICE].noul) >= NOUL_TRUE_AT
         except (AttributeError, KeyError, TypeError, ValueError) as exc:
             raise TriageUnavailable(
                 f"Jev returned an unreadable answer set for {message_id}: {type(exc).__name__}"

@@ -21,6 +21,9 @@ appears in:
   not silently missed;
 - the message or ``repr`` of any exception that escaped the pipeline;
 - any notifier payload;
+- any notification sent through ``notifications``, a
+  :class:`inbox_core.notify.RecordingTransport` the caller wired into the
+  pipeline's :class:`inbox_core.notify.Notifications` (optional);
 - any audit record.
 
 It also fails if nothing was logged or audited at all, because a sweep over
@@ -37,6 +40,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, field
 
 from inbox_core.messages import IncomingMessage
+from inbox_core.notify import RecordingTransport
 from inbox_core.pipeline import AuditSink, InMemoryAuditSink, Notifier, Pipeline
 from inbox_core.testing.fakes import RecordingNotifier
 from inbox_core.testing.logs import CORE_LOGGERS, LogCapture, attached_caplog
@@ -98,6 +102,7 @@ def run_privacy_sweep(
     logger_names: Iterable[str] = (),
     extra_forbidden: Iterable[str] = (),
     min_phrase: int = MIN_PHRASE,
+    notifications: RecordingTransport | None = None,
 ) -> SweepReport:
     """Drive ``corpus`` through a pipeline and fail on any leak. See the module docstring."""
     if not corpus:
@@ -128,6 +133,9 @@ def run_privacy_sweep(
         "exceptions": "\n".join(f"{exc}\n{exc!r}" for exc in escaped),
         "notifier payloads": "\n".join(
             json.dumps(asdict(item), sort_keys=True) + repr(item) for item in notifier.escalations
+        ),
+        "notifications": "\n".join(
+            f"{title}\n{body}" for title, body in (notifications.sent if notifications else [])
         ),
         "audit records": "\n".join(
             json.dumps(record.to_dict(), sort_keys=True) + repr(record) for record in audit.records

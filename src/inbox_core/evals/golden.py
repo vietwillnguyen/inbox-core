@@ -46,6 +46,7 @@ _KEYS = {
     "expected_tier",
     "expected_asks_for_human",
     "expected_mentions_money",
+    "expected_asks_listed_price",
     "must_mention",
     "must_not_answer",
     "note",
@@ -68,6 +69,7 @@ class GoldenCase:
     expected_tier: str
     expected_asks_for_human: bool = False
     expected_mentions_money: bool = False
+    expected_asks_listed_price: bool = False
     must_mention: tuple[str, ...] = ()
     must_not_answer: tuple[str, ...] = ()
     note: str = ""
@@ -81,6 +83,7 @@ class GoldenCase:
             asks_for_human=self.expected_asks_for_human,
             mentions_money_or_commitment=self.expected_mentions_money,
             classifier="golden",
+            asks_listed_price=self.expected_asks_listed_price,
         )
 
     @property
@@ -182,6 +185,7 @@ def _build(entry: object, index: int, config: ClientConfig) -> GoldenCase:
         expected_tier=data["expected_tier"],
         expected_asks_for_human=_flag(data, "expected_asks_for_human", where),
         expected_mentions_money=_flag(data, "expected_mentions_money", where),
+        expected_asks_listed_price=_flag(data, "expected_asks_listed_price", where),
         must_mention=_strings(data, "must_mention", where),
         must_not_answer=_strings(data, "must_not_answer", where),
         note=str(data.get("note", "")),
@@ -192,7 +196,13 @@ def _build(entry: object, index: int, config: ClientConfig) -> GoldenCase:
             f"{where}: expected_tier is {case.expected_tier!r} but derive_tier gives "
             f"{derived!r} for category {category!r}, language {language!r}, "
             f"asks_for_human={case.expected_asks_for_human}, "
-            f"mentions_money={case.expected_mentions_money}"
+            f"mentions_money={case.expected_mentions_money}, "
+            f"asks_listed_price={case.expected_asks_listed_price}"
+        )
+    if case.expected_asks_listed_price and not case.expected_mentions_money:
+        raise GoldenSetInvalid(
+            f"{where}: expected_asks_listed_price needs expected_mentions_money; a price "
+            "question mentions money"
         )
     if case.is_answerable and not case.must_mention:
         raise GoldenSetInvalid(

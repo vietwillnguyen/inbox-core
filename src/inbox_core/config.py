@@ -29,14 +29,21 @@ from inbox_core.delivery import DeliveryMode
 
 __all__ = [
     "DEFAULT_LINKS_LABEL",
+    "DEFAULT_NOTIFY_EVENTS",
     "ESCALATION_TIERS",
     "MAX_LINKS_LABEL",
+    "NOTIFY_EVENTS",
+    "PRICE_POLICIES",
     "CategoryRule",
     "ClientConfig",
     "ConfigError",
     "DeliveryPolicy",
     "EscalationTier",
+    "NotificationPolicy",
+    "NotifyEvent",
     "Organisation",
+    "PricePolicy",
+    "QuietHours",
     "TriagePolicy",
     "load_config",
 ]
@@ -45,6 +52,15 @@ EscalationTier = Literal["needs_admin", "needs_executive", "skip"]
 """Where a category goes when it is not answered automatically."""
 
 ESCALATION_TIERS: tuple[EscalationTier, ...] = ("needs_admin", "needs_executive", "skip")
+
+PricePolicy = Literal["always_hand_off", "published_prices_only", "draft_for_approval"]
+"""What happens to a message that asks what something costs. See :class:`TriagePolicy`."""
+
+PRICE_POLICIES: tuple[PricePolicy, ...] = (
+    "always_hand_off",
+    "published_prices_only",
+    "draft_for_approval",
+)
 
 DEFAULT_LINKS_LABEL = "More:"
 """The words before a reply's public links when a client sets none."""
@@ -125,12 +141,29 @@ class TriagePolicy:
     first is the default, used for a holding message when the language is
     unknown. ``fallback_category`` is what the audit records when the
     classifier is unavailable, and must be a category a person handles.
+
+    ``prices`` says what happens to a message whose only mention of money is
+    a question about what something normally costs:
+
+    - ``always_hand_off`` (the default): like any mention of money, it goes to
+      ``needs_executive``. The classifier is not even asked the question.
+    - ``published_prices_only``: it is triaged like any other message, so it
+      may be auto-answered, and the reply is checked in code
+      (:mod:`inbox_core.prices`): a price the reply states that no passage it
+      cites states sends the message to ``needs_executive`` instead.
+    - ``draft_for_approval``: the same, except that the reply to a price
+      question, and any reply that states a price, is held for a person to
+      approve rather than sent.
+
+    Refunds, discounts, disputes, negotiation and custom quotes are not price
+    questions, so they go to a person under every setting.
     """
 
     categories: tuple[CategoryRule, ...]
     languages: Mapping[str, str]
     confidence_threshold: float | None
     fallback_category: str
+    prices: PricePolicy = "always_hand_off"
     _by_name: Mapping[str, CategoryRule] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -171,6 +204,9 @@ class TriagePolicy:
                 yield f"language code {code!r} must be a lower-case code such as 'en' or 'pt-br'"
             if not isinstance(name, str) or not name.strip():
                 yield f"language {code!r} needs a name"
+
+        if self.prices not in PRICE_POLICIES:
+            yield f"triage.prices must be one of {', '.join(PRICE_POLICIES)}"
 
         fallback = next((r for r in self.categories if r.name == self.fallback_category), None)
         if fallback is None:
@@ -224,6 +260,11 @@ class TriagePolicy:
             else:
                 groups[1].append(rule.name)
         return tuple(name for group in groups for name in group)
+
+    @property
+    def answers_prices(self) -> bool:
+        """Whether a plain price question may be answered (or drafted) at all."""
+        return self.prices != "always_hand_off"
 
     def with_threshold(self, threshold: float) -> TriagePolicy:
         """A copy at another confidence threshold, validated like any other."""
@@ -365,19 +406,195 @@ class DeliveryPolicy:
         return ZoneInfo(self.timezone)
 
 
+NotifyEvent = Literal["hand_off", "draft_held", "reminder"]
+"""What a person can be notified about: a hand-off, a held draft, or either left waiting."""
+
+NOTIFY_EVENTS: tuple[NotifyEvent, ...] = ("hand_off", "draft_held", "reminder")
+
+DEFAULT_NOTIFY_EVENTS: frozenset[str] = frozenset({"hand_off", "draft_held"})
+"""The events notified when a client names URLs but no events."""
+
+_PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]{0,63})\}")
+_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+_SECRET_QUERY = re.compile(
+    r"[?&](?:token|password|pass|pwd|secret|key|apikey|api_key|webhook)=(?!&|$)", re.IGNORECASE
+)
+_CLOCK = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+LINK_FIELDS = ("channel", "thread_key", "conversation_id")
+"""The placeholders a ``notifications.link`` template may use."""
+
+
+def _minutes_of(clock: str) -> int:
+    found = _CLOCK.match(clock)
+    if found is None:
+        raise ValueError(clock)
+    return int(found.group(1)) * 60 + int(found.group(2))
+
+
+@dataclass(frozen=True)
+class QuietHours:
+    """A daily window, in the organisation's timezone, when nobody is notified.
+
+    ``start`` and ``end`` are ``HH:MM``; a window that ends before it starts
+    runs past midnight (``22:00`` to ``07:00``).
+    """
+
+    start: str
+    end: str
+
+    def __post_init__(self) -> None:
+        problems = []
+        for name in ("start", "end"):
+            value: object = getattr(self, name)
+            if not isinstance(value, str) or not _CLOCK.match(value):
+                problems.append(f"notifications.quiet_hours.{name} must be a time such as '22:00'")
+        if not problems and self.start == self.end:
+            problems.append("notifications.quiet_hours must not start and end at the same time")
+        if problems:
+            raise ConfigError(problems)
+
+    def contains(self, hour: int, minute: int) -> bool:
+        """Whether the local time ``hour:minute`` falls inside the window."""
+        now = hour * 60 + minute
+        start, end = _minutes_of(self.start), _minutes_of(self.end)
+        if start < end:
+            return start <= now < end
+        return now >= start or now < end
+
+
+def _url_problems(index: int, url: object) -> list[str]:
+    where = f"notifications.urls[{index}]"
+    if not isinstance(url, str) or not url.strip():
+        return [f"{where} must be a non-empty string"]
+    # Problems never quote the URL: whatever it holds may be a secret.
+    names = _PLACEHOLDER.findall(url)
+    literal = _PLACEHOLDER.sub("", url)
+    problems = []
+    if "$" in literal:
+        problems.append(f"{where} has a '$' that is not a ${{VARIABLE}} placeholder")
+    if not names:
+        problems.append(
+            f"{where} names no environment variable; put the URL's token, key or password "
+            "(or the whole URL) in a ${VARIABLE} placeholder, so the file holds no secret"
+        )
+    whole = url.strip()
+    if not _SCHEME.match(whole) and not _PLACEHOLDER.fullmatch(whole):
+        problems.append(f"{where} must start with an Apprise scheme such as json:// or be ${{VAR}}")
+    authority = literal.split("://", 1)[1].split("/", 1)[0] if "://" in literal else ""
+    if "@" in authority and ":" in authority.split("@", 1)[0]:
+        problems.append(f"{where} has a password written into it; use a ${{VARIABLE}} instead")
+    if _SECRET_QUERY.search(literal):
+        problems.append(f"{where} has a secret query value written into it; use a ${{VARIABLE}}")
+    return problems
+
+
+def _link_problems(link: object) -> list[str]:
+    if not isinstance(link, str):
+        return ["notifications.link must be a string"]
+    if not link:
+        return []
+    if not link.startswith(("https://", "http://")):
+        return ["notifications.link must be an http or https URL template"]
+    try:
+        link.format(**dict.fromkeys(LINK_FIELDS, "1"))
+    except (KeyError, IndexError, ValueError):
+        return [
+            "notifications.link may use only the placeholders "
+            + ", ".join(f"{{{name}}}" for name in LINK_FIELDS)
+        ]
+    return []
+
+
+@dataclass(frozen=True)
+class NotificationPolicy:
+    """Who is told, and when, that a person is needed. Off unless ``urls`` names one.
+
+    ``urls`` are Apprise URLs (https://github.com/caronc/apprise), each with its
+    secrets in ``${VARIABLE}`` placeholders that are read from the environment
+    when the notifier is built (:mod:`inbox_core.notify`), never written in the
+    file. ``events`` picks what is notified: ``hand_off``, ``draft_held``, and
+    ``reminder``, which needs ``remind_after_minutes`` and repeats a hand-off or
+    held draft that is still waiting that long after. ``quiet_hours`` holds
+    notifications back in a daily window. ``link`` is a URL template for the
+    conversation, with ``{channel}``, ``{thread_key}`` and ``{conversation_id}``;
+    a channel such as Chatwoot supplies its own when it is empty.
+
+    A notification carries the event, the category, tier and reason, and the
+    link; never what the sender wrote, their name or their address.
+    """
+
+    urls: tuple[str, ...] = ()
+    events: frozenset[str] = DEFAULT_NOTIFY_EVENTS
+    remind_after_minutes: int | None = None
+    quiet_hours: QuietHours | None = None
+    link: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "urls", tuple(self.urls))
+        problems: list[str] = []
+        for index, url in enumerate(self.urls):
+            problems.extend(_url_problems(index, url))
+        events: object = self.events
+        if not isinstance(events, frozenset):
+            problems.append("notifications.events must be a set of event names")
+        else:
+            for name in sorted(str(e) for e in events):
+                if name not in NOTIFY_EVENTS:
+                    problems.append(
+                        f"notifications.events: unknown event {name!r}; expected one of "
+                        f"{', '.join(NOTIFY_EVENTS)}"
+                    )
+            if self.urls and not events:
+                problems.append("notifications.events must name at least one event")
+            remind: object = self.remind_after_minutes
+            if remind is not None:
+                if isinstance(remind, bool) or not isinstance(remind, int) or remind < 1:
+                    problems.append(
+                        "notifications.remind_after_minutes must be a whole number of at least 1"
+                    )
+                if "reminder" not in events:
+                    problems.append(
+                        "notifications.remind_after_minutes is set but events has no 'reminder'"
+                    )
+            elif "reminder" in events:
+                problems.append("notifications.events has 'reminder' but no remind_after_minutes")
+        quiet: object = self.quiet_hours
+        if quiet is not None and not isinstance(quiet, QuietHours):
+            problems.append("notifications.quiet_hours must be a table with start and end")
+        problems.extend(_link_problems(self.link))
+        if problems:
+            raise ConfigError(problems)
+
+    @property
+    def enabled(self) -> bool:
+        """Whether anything is ever notified."""
+        return bool(self.urls)
+
+    @property
+    def variables(self) -> tuple[str, ...]:
+        """The environment variables the URLs read, in order, each once."""
+        found = (name for url in self.urls for name in _PLACEHOLDER.findall(url))
+        return tuple(dict.fromkeys(found))
+
+    def notifies(self, event: str) -> bool:
+        """Whether ``event`` is notified at all."""
+        return self.enabled and event in self.events
+
+
 @dataclass(frozen=True)
 class ClientConfig:
     """Everything a client configures about the core, as one validated object.
 
     ``templates`` holds fixed replies the client wrote, by template name and
     then by language code, for the :class:`inbox_core.handlers.Template`
-    handler.
+    handler. ``notifications`` is off by default.
     """
 
     organisation: Organisation
     triage: TriagePolicy
     templates: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     delivery: DeliveryPolicy = field(default_factory=DeliveryPolicy)
+    notifications: NotificationPolicy = field(default_factory=NotificationPolicy)
 
     def __post_init__(self) -> None:
         frozen = {
@@ -483,22 +700,63 @@ class _Reader:
         return cast("Mapping[str, Any]", data)
 
     def client(self, data: Mapping[str, Any]) -> ClientConfig | None:
-        sections = ("organisation", "triage", "templates", "delivery")
+        sections = ("organisation", "triage", "templates", "delivery", "notifications")
         root = self.table(data, "the configuration", sections)
         if root is None:
             return None
         organisation = self.organisation(root.get("organisation"))
         triage = self.triage(root.get("triage"))
         delivery = self.delivery(root.get("delivery", {}))
+        notifications = self.notifications(root.get("notifications", {}))
         templates = root.get("templates", {})
         if not isinstance(templates, Mapping):
             self.problems.append("templates must be a table of template tables")
             return None
-        if organisation is None or triage is None or delivery is None:
+        if organisation is None or triage is None or delivery is None or notifications is None:
             return None
         return self._build(
             lambda: ClientConfig(
-                organisation=organisation, triage=triage, templates=templates, delivery=delivery
+                organisation=organisation,
+                triage=triage,
+                templates=templates,
+                delivery=delivery,
+                notifications=notifications,
+            )
+        )
+
+    def notifications(self, data: object) -> NotificationPolicy | None:
+        allowed = ("urls", "events", "remind_after_minutes", "quiet_hours", "link")
+        table = self.table(data, "notifications", allowed)
+        if table is None:
+            return None
+        urls = table.get("urls", [])
+        if not isinstance(urls, list):
+            self.problems.append("notifications.urls must be a list of Apprise URLs")
+            return None
+        if table and not urls:
+            self.problems.append("notifications needs at least one url in urls")
+            return None
+        events = table.get("events", sorted(DEFAULT_NOTIFY_EVENTS))
+        if not isinstance(events, list) or not all(isinstance(e, str) for e in events):
+            self.problems.append("notifications.events must be a list of event names")
+            return None
+        quiet: QuietHours | None = None
+        raw_quiet = table.get("quiet_hours")
+        if raw_quiet is not None:
+            hours = self.table(raw_quiet, "notifications.quiet_hours", ("start", "end"))
+            if hours is None:
+                return None
+            built = self._build(lambda: QuietHours(hours.get("start", ""), hours.get("end", "")))
+            if built is None:
+                return None
+            quiet = built
+        return self._build(
+            lambda: NotificationPolicy(
+                urls=tuple(urls),
+                events=frozenset(events),
+                remind_after_minutes=table.get("remind_after_minutes"),
+                quiet_hours=quiet,
+                link=table.get("link", ""),
             )
         )
 
@@ -551,7 +809,7 @@ class _Reader:
         )
 
     def triage(self, data: object) -> TriagePolicy | None:
-        allowed = ("categories", "languages", "confidence_threshold", "fallback_category")
+        allowed = ("categories", "languages", "confidence_threshold", "fallback_category", "prices")
         table = self.table(data, "triage", allowed)
         if table is None:
             return None
@@ -572,6 +830,7 @@ class _Reader:
                 languages=languages,
                 confidence_threshold=table.get("confidence_threshold"),
                 fallback_category=table.get("fallback_category", ""),
+                prices=table.get("prices", "always_hand_off"),
             )
         )
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import secrets
 from collections.abc import Iterator
@@ -9,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from inbox_core.config import NotificationPolicy
 from inbox_core.crypto import FieldCipher
 from inbox_core.handlers import (
     ExtractiveGenerator,
@@ -19,6 +21,7 @@ from inbox_core.handlers import (
 )
 from inbox_core.knowledge import InMemoryRetriever, KnowledgeEntry
 from inbox_core.messages import IncomingMessage
+from inbox_core.notify import Notifications, RecordingTransport
 from inbox_core.pipeline import AuditSink, Notifier, Pipeline
 from inbox_core.store.memory import InMemoryConversationStore
 from inbox_core.testing.fakes import FakeClassifier, RecordingSink, signals
@@ -103,10 +106,18 @@ class Leaky:
         raise RuntimeError(text)
 
 
-def builder(handlers: HandlerRegistry | None = None) -> Any:
+def builder(
+    handlers: HandlerRegistry | None = None, notify: RecordingTransport | None = None
+) -> Any:
     def build(notifier: Notifier, audit: AuditSink) -> Pipeline:
+        client = config("auto")
+        if notify is not None:
+            client = dataclasses.replace(
+                client, notifications=NotificationPolicy(urls=("json://${NOTIFY_HOST}/",))
+            )
         return Pipeline(
-            config=config("auto"),
+            config=client,
+            notifications=Notifications(client, notify) if notify is not None else None,
             classifier=FakeClassifier(by_message=dict(CLASSIFIER.by_message)),
             handlers=handlers
             or HandlerRegistry(
@@ -151,6 +162,15 @@ class TestTheCoreIsClean:
         assert report.decisions["skipped"] == 1
         assert report.decisions["dropped"] == 1
 
+    def test_notifications_leak_nothing(self, caplog: pytest.LogCaptureFixture) -> None:
+        transport = RecordingTransport()
+        report = run_privacy_sweep(
+            builder(notify=transport), CORPUS, caplog, notifications=transport
+        )
+        assert report.decisions["handed_off"] >= 3
+        assert len(transport.sent) >= 3
+        assert "notifications" in report.places
+
     def test_a_crashing_handler_with_content_in_its_exception_still_leaks_nothing(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -187,6 +207,19 @@ class TestTheSweepCatchesLeaks:
             run_privacy_sweep(builder(HandlerRegistry({"faq": Leaky("reason")})), CORPUS, caplog)
         assert "notifier payloads" in str(caught.value)
         assert "audit records" in str(caught.value)
+
+    def test_content_in_a_reason_reaches_a_notification(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        transport = RecordingTransport()
+        with pytest.raises(PrivacyLeak) as caught:
+            run_privacy_sweep(
+                builder(HandlerRegistry({"faq": Leaky("reason")}), transport),
+                CORPUS,
+                caplog,
+                notifications=transport,
+            )
+        assert "notifications:" in str(caught.value)
 
     def test_an_exception_that_escapes(self, caplog: pytest.LogCaptureFixture) -> None:
         class Escaping(Pipeline):
