@@ -126,7 +126,7 @@ class TestLabelsAndNotes:
 
 
 class TestThePipelineCallsThem:
-    def test_a_hand_off_posts_a_note_labels_assigns_and_opens_in_that_order(self) -> None:
+    def test_a_hand_off_posts_a_note_labels_opens_and_assigns_in_that_order(self) -> None:
         actions = RecordingHandOff()
         h = harness(classifier=FakeClassifier(default=signals("refund")), handoff_actions=actions)
         record = h.pipeline.process(message("I want my money back"))
@@ -134,8 +134,8 @@ class TestThePipelineCallsThem:
         assert [step for step, _ in actions.calls] == [
             "add_internal_note",
             "add_labels",
-            "assign",
             "open_for_person",
+            "assign",
         ]
         request = actions.calls[0][1]
         assert request.purpose == "hand_off"
@@ -179,8 +179,8 @@ class TestThePipelineCallsThem:
             "holding",
             "add_internal_note",
             "add_labels",
-            "assign",
             "open_for_person",
+            "assign",
             "notify",
         ]
 
@@ -201,8 +201,8 @@ class TestThePipelineCallsThem:
         assert [step for step, _ in actions.calls] == [
             "add_internal_note",
             "add_labels",
-            "assign",
             "open_for_person",
+            "assign",
         ]
         request = actions.calls[0][1]
         assert request.purpose == "review"
@@ -281,7 +281,7 @@ class TestThePipelineCallsThem:
         record = h.pipeline.process(message("I want my money back"))
         assert record.decision == "handed_off"
         assert record.handoff_failures == (step,)
-        assert [name for name, _ in actions.calls][-1] == "open_for_person"
+        assert "open_for_person" in [name for name, _ in actions.calls]
         assert len(h.notifier.escalations) == 1
 
     def test_failing_to_open_the_conversation_leaves_the_message_for_a_retry(self) -> None:
@@ -295,6 +295,8 @@ class TestThePipelineCallsThem:
         assert conversation is not None
         assert conversation.status == "bot"
         assert h.notifier.escalations == []
+        # Nothing is assigned to a conversation nobody could be shown.
+        assert "assign" not in [name for name, _ in actions.calls]
 
         # The retry does not send a second holding message, and finishes.
         actions.fail_on = frozenset()

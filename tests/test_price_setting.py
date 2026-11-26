@@ -247,6 +247,42 @@ class TestAlwaysHandOff:
         assert [reply.kind for reply in sink.sent] == ["holding"]
 
 
+class TestTheInventedPriceCheckRunsForEveryClient:
+    """Owner decision: the check is on at every level, the default included.
+
+    This changes behaviour for existing clients: under ``always_hand_off`` an
+    answer that states a price no cited entry states was sent before; now it
+    is handed off as ``needs_executive``.
+    """
+
+    def test_a_non_price_answer_with_an_invented_price_is_handed_off_by_default(self) -> None:
+        record, sink, generator = run(
+            "always_hand_off",
+            "We are open Tuesday to Saturday. Parking is £5 a day.",
+            triage=signals("faq"),
+        )
+        assert generator.calls == 1
+        assert (record.decision, record.tier) == ("handed_off", "needs_executive")
+        assert record.reason == UNSTATED_PRICE
+        assert "price:unstated" in record.tags
+        assert [reply.kind for reply in sink.sent] == ["holding"]
+        assert all("£5" not in reply.text for reply in sink.sent)
+
+    def test_a_price_written_in_the_cited_entry_is_still_sent_by_default(self) -> None:
+        record, sink, _ = run(
+            "always_hand_off", "A full service costs £120.", triage=signals("faq")
+        )
+        assert record.decision == "answered"
+        assert "price:stated" in record.tags
+        assert sink.sent[0].text == "A full service costs £120."
+
+    def test_a_bare_number_is_not_a_price_outside_a_price_question(self) -> None:
+        record, _, _ = run(
+            "always_hand_off", "We open at 9am, 6 days a week.", triage=signals("faq")
+        )
+        assert record.decision == "answered"
+
+
 class TestPublishedPricesOnly:
     def test_a_price_stated_in_the_cited_entry_is_answered(self) -> None:
         record, sink, _ = run("published_prices_only", "A basic service costs £45.")
@@ -318,11 +354,13 @@ class TestDraftForApproval:
         assert sink.sent == []
         assert sink.held[0].text == "A basic service costs £45."
 
-    def test_an_invented_price_is_held_and_says_so(self) -> None:
+    def test_an_invented_price_is_handed_off_not_drafted(self) -> None:
+        # Owner decision: an unstated price is handed off at every level.
         record, sink, _ = run("draft_for_approval", "A basic service costs £40.")
-        assert record.decision == "answer_held"
-        assert record.held_because == "a price no cited entry states needs approval"
-        assert sink.sent == []
+        assert (record.decision, record.tier) == ("handed_off", "needs_executive")
+        assert record.reason == UNSTATED_PRICE
+        assert sink.held == []
+        assert [reply.kind for reply in sink.sent] == ["holding"]
 
     def test_a_price_question_answered_without_a_price_is_still_held(self) -> None:
         record, _, _ = run("draft_for_approval", "Please ask at the counter.")

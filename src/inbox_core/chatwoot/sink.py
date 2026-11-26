@@ -46,8 +46,16 @@ class ChatwootReplySink:
         return None
 
 
+ASSIGNS_LABEL = "inbox-core-assigns"
+"""Added with the hand-off labels when the service itself assigns (``INBOX_CORE_ASSIGNEE_ID``).
+
+The seed's hand-off rule skips a conversation with this label, so the service's
+assignee wins and nobody is notified twice (see ``docs/chatwoot.md``).
+"""
+
+
 class ChatwootHandOff:
-    """Notes, labels, assignment and opening, through the bot's token."""
+    """Notes, labels, opening and assignment, through the bot's token."""
 
     def __init__(self, api: ChatwootApi, *, assignee_id: int | None = None) -> None:
         self._api = api
@@ -58,9 +66,12 @@ class ChatwootHandOff:
         self._api.add_private_note(conversation_id_of(request.thread_key), request.note)
 
     def add_labels(self, request: HandOffRequest) -> None:
-        """Add the request's labels to the conversation."""
-        if request.labels:
-            self._api.add_labels(conversation_id_of(request.thread_key), request.labels)
+        """Add the request's labels, and :data:`ASSIGNS_LABEL` when this service assigns."""
+        labels = request.labels
+        if labels and self._assignee is not None and request.purpose != "answered":
+            labels = (*labels, ASSIGNS_LABEL)
+        if labels:
+            self._api.add_labels(conversation_id_of(request.thread_key), labels)
 
     def assign(self, request: HandOffRequest) -> None:
         """Assign to the configured agent, if one is configured."""

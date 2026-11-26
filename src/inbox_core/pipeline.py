@@ -17,11 +17,11 @@ Every message takes the same steps, in this order:
    hand-off actions. A client that sets ``delivery.show_sources`` gets one
    line linking to the entries' public pages instead (see
    :func:`with_public_links`), never an id or title.
-   For a client that answers prices (``triage.prices``), the reply's prices
-   are checked against the passages it cites (:mod:`inbox_core.prices`) before
-   delivery: under ``published_prices_only`` an unstated price hands the
-   message to ``needs_executive``, and under ``draft_for_approval`` a reply to
-   a price question, or one that states a price, is held for approval.
+   Every reply's prices are checked against the passages it cites
+   (:mod:`inbox_core.prices`) before delivery, for every client: a price no
+   cited passage states hands the message to ``needs_executive``. Under
+   ``triage.prices = "draft_for_approval"`` a reply to a price question, or
+   one that states a price, is held for approval.
 6. **Hand off.** Everything else - an escalating tier, a handler that declined
    or failed, a failed delivery, delivery being off - is handed to a person: a
    holding message (through the same delivery rules), a notification, and the
@@ -130,7 +130,6 @@ HOLDING_KIND = "holding"
 UNSTATED_PRICE = "the reply states a price that no knowledge entry it cites states"
 """Why a reply was handed off under ``published_prices_only``."""
 PRICE_APPROVAL = "a price needs approval"
-UNSTATED_PRICE_APPROVAL = "a price no cited entry states needs approval"
 
 
 @dataclass(frozen=True)
@@ -622,28 +621,28 @@ class Pipeline:
         if not requires_approval and decision.category in self._config.delivery.approval_categories:
             requires_approval = True
             approval_reason = f"category {decision.category} needs approval"
+        # The invented-price check runs for every client, whatever its price
+        # setting (an owner decision; see docs/design.md, "Prices").
         policy = self._config.triage
-        if policy.answers_prices:
-            price_question = is_price_question(decision, policy)
-            check = check_prices(
-                result.text,
-                (source.passage for source in result.sources),
-                price_question=price_question,
-            )
-            if check.unstated:
-                draft.tags = (*result.tags, "price:unstated")
-            elif check.states_prices:
-                draft.tags = (*result.tags, "price:stated")
-            if check.unstated and policy.prices == "published_prices_only":
-                draft.escalate_to = "needs_executive"
-                return UNSTATED_PRICE
-            if (
-                policy.prices == "draft_for_approval"
-                and (price_question or check.states_prices)
-                and not requires_approval
-            ):
-                requires_approval = True
-                approval_reason = UNSTATED_PRICE_APPROVAL if check.unstated else PRICE_APPROVAL
+        price_question = is_price_question(decision, policy)
+        check = check_prices(
+            result.text,
+            (source.passage for source in result.sources),
+            price_question=price_question,
+        )
+        if check.unstated:
+            draft.tags = (*result.tags, "price:unstated")
+            draft.escalate_to = "needs_executive"
+            return UNSTATED_PRICE
+        if check.states_prices:
+            draft.tags = (*result.tags, "price:stated")
+        if (
+            policy.prices == "draft_for_approval"
+            and (price_question or check.states_prices)
+            and not requires_approval
+        ):
+            requires_approval = True
+            approval_reason = PRICE_APPROVAL
 
         text = result.text
         if self._config.delivery.show_sources:
@@ -939,7 +938,12 @@ class Pipeline:
         reason: str,
         draft: _Draft,
     ) -> None:
-        """Run the channel's hand-off steps in order; only failing to open is fatal."""
+        """Run the channel's hand-off steps in order; only failing to open is fatal.
+
+        Note, labels, open, then assign: an assignment made before the
+        conversation is open may not be announced (Chatwoot does not notify
+        one made while a conversation is pending), so it comes after.
+        """
         category = draft.category or self._config.triage.fallback_category
         request = HandOffRequest(
             purpose=purpose,
@@ -966,24 +970,34 @@ class Pipeline:
         for name, step in (
             ("add_internal_note", actions.add_internal_note),
             ("add_labels", actions.add_labels),
-            ("assign", actions.assign),
         ):
-            try:
-                step(request)
-            except Exception as exc:
-                draft.handoff_failures.append(name)
-                logger.warning(
-                    "hand-off step %s failed for %s: %s",
-                    name,
-                    message.provider_message_id,
-                    type(exc).__name__,
-                )
+            self._best_effort(name, step, request, message, draft)
         try:
             actions.open_for_person(request)
         except Exception as exc:
             raise _Incomplete(
                 f"could not open the conversation for a person ({type(exc).__name__})"
             ) from None
+        self._best_effort("assign", actions.assign, request, message, draft)
+
+    @staticmethod
+    def _best_effort(
+        name: str,
+        step: Callable[[HandOffRequest], None],
+        request: HandOffRequest,
+        message: IncomingMessage,
+        draft: _Draft,
+    ) -> None:
+        try:
+            step(request)
+        except Exception as exc:
+            draft.handoff_failures.append(name)
+            logger.warning(
+                "hand-off step %s failed for %s: %s",
+                name,
+                message.provider_message_id,
+                type(exc).__name__,
+            )
 
     def _escalation(self, message: IncomingMessage, draft: _Draft, tier: str) -> Escalation:
         return Escalation(

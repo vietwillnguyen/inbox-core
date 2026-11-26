@@ -216,3 +216,20 @@ class TestHostile:
                 "POST", "/inbox_members", {"inbox_id": inbox, "user_ids": [agent]}
             ).is_success
         quiet_for(lambda: bool(person.replies()), 2)
+
+
+def test_a_held_draft_notifies_the_services_assignee_exactly_once(
+    visitor: Callable[[], Visitor], admin: Agent, volunteer: Agent, tokens: dict[str, str]
+) -> None:
+    from tests.e2e.test_6_assignment_alerts import assignee_of, assignments
+
+    person = visitor()
+    person.say(QUESTION)
+    conversation_id = until(lambda: person.conversation_id, timeout=30)
+    until(lambda: "draft-pending" in admin.conversation(conversation_id)["labels"], timeout=30)
+    assert until(lambda: assignments(volunteer, conversation_id), timeout=30)
+    quiet_for(lambda: len(assignments(volunteer, conversation_id)) > 1, 8)
+    assert len(assignments(volunteer, conversation_id)) == 1
+    assert assignments(admin, conversation_id) == []
+    assert assignee_of(admin, conversation_id) == int(tokens["CHATWOOT_AGENT_USER_ID"])
+    assert person.replies() == []
