@@ -53,6 +53,7 @@ class InMemoryConversationStore:
         self._rows: dict[int, _Row] = {}
         self._inbound: dict[tuple[str, str], int] = {}
         self._leases: dict[int, tuple[str, datetime]] = {}
+        self._reminders: set[str] = set()
 
     def _now(self) -> datetime:
         return as_naive_utc(self._clock())
@@ -458,3 +459,45 @@ class InMemoryConversationStore:
             ids = {c.id for c in self._conversations.values() if c.sender_key == sender_key}
             rows = {k: r for k, r in self._rows.items() if r.message.conversation_id in ids}
             return self._erase(rows)
+
+    def held_before(self, before: datetime) -> tuple[StoredMessage, ...]:
+        """Held outbound replies created before ``before``, oldest first."""
+        bound = as_naive_utc(before)
+        with self._lock:
+            return tuple(
+                row.message
+                for row in sorted(self._rows.values(), key=lambda r: r.message.id)
+                if row.message.direction == "outbound"
+                and row.message.action == "held"
+                and row.message.created_at < bound
+            )
+
+    def paused_before(self, before: datetime) -> tuple[Conversation, ...]:
+        """Conversations paused after a hand-off since before ``before``, oldest first."""
+        bound = as_naive_utc(before)
+        with self._lock:
+            return tuple(
+                sorted(
+                    (
+                        c
+                        for c in self._conversations.values()
+                        if c.status == "paused_handoff" and c.updated_at < bound
+                    ),
+                    key=lambda c: (c.updated_at, c.id),
+                )
+            )
+
+    def claim_reminder(self, key: str) -> bool:
+        """Claim ``key``; False if it was already claimed."""
+        if not key or len(key) > 160:
+            raise ValueError("a reminder key must be 1 to 160 characters")
+        with self._lock:
+            if key in self._reminders:
+                return False
+            self._reminders.add(key)
+            return True
+
+    def release_reminder(self, key: str) -> None:
+        """Give ``key`` back."""
+        with self._lock:
+            self._reminders.discard(key)

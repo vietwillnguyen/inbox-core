@@ -371,9 +371,19 @@ def test_optional_sdks_are_not_imported_by_the_adapters_or_the_package() -> None
     # have imported one of these, which made this check pass or fail by order.
     import subprocess
 
-    optional = ("litellm", "typesafe_sdk", "sqlalchemy", "fastapi", "starlette", "uvicorn", "httpx")
+    optional = (
+        "litellm",
+        "typesafe_sdk",
+        "sqlalchemy",
+        "fastapi",
+        "starlette",
+        "uvicorn",
+        "httpx",
+        "apprise",
+    )
     probe = (
-        "import sys, inbox_core, inbox_core.adapters.litellm, inbox_core.adapters.jev;"
+        "import sys, inbox_core, inbox_core.adapters.litellm, inbox_core.adapters.jev,"
+        " inbox_core.adapters.apprise, inbox_core.notify, inbox_core.pipeline;"
         f"print(','.join(n for n in {optional!r} if n in sys.modules))"
     )
     found = subprocess.run(  # noqa: S603 - a fixed probe in this interpreter

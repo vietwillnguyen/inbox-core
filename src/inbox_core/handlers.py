@@ -66,12 +66,18 @@ class Source:
     ``url`` is the entry's public page, when it has one. The id and title are
     for staff; the url is the only part the public may be shown, and only
     when the client sets ``delivery.show_sources``.
+
+    ``passage`` is the title and text the reply was written from. The
+    pipeline's published-price check (:mod:`inbox_core.prices`) reads it; it
+    is never stored, audited or shown. A handler that leaves it empty cites
+    no price, so any price in its reply is unstated.
     """
 
     id: str
     title: str
     score: float
     url: str | None = None
+    passage: str = field(default="", repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -322,7 +328,12 @@ class GroundedAnswer:
         if not text or REFUSAL_SENTINEL in text:
             return HandlerResult.hand_off(self.name, "the generator found the context insufficient")
 
-        sources = tuple(Source(p.entry.id, p.entry.title, p.score, p.entry.url) for p in passages)
+        sources = tuple(
+            Source(
+                p.entry.id, p.entry.title, p.score, p.entry.url, f"{p.entry.title}\n{p.entry.text}"
+            )
+            for p in passages
+        )
         return HandlerResult.reply(self.name, text, sources=sources)
 
 

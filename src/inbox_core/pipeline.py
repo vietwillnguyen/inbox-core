@@ -17,10 +17,18 @@ Every message takes the same steps, in this order:
    hand-off actions. A client that sets ``delivery.show_sources`` gets one
    line linking to the entries' public pages instead (see
    :func:`with_public_links`), never an id or title.
+   For a client that answers prices (``triage.prices``), the reply's prices
+   are checked against the passages it cites (:mod:`inbox_core.prices`) before
+   delivery: under ``published_prices_only`` an unstated price hands the
+   message to ``needs_executive``, and under ``draft_for_approval`` a reply to
+   a price question, or one that states a price, is held for approval.
 6. **Hand off.** Everything else - an escalating tier, a handler that declined
    or failed, a failed delivery, delivery being off - is handed to a person: a
    holding message (through the same delivery rules), a notification, and the
    conversation paused.
+7. **Notify.** With ``notifications`` (:mod:`inbox_core.notify`), a finished
+   hand-off and a held draft are announced, best effort: a failure is recorded
+   as ``notification`` in ``handoff_failures`` and changes nothing else.
 
 It fails closed. If a person cannot be told, the message is left unhandled
 (``incomplete``) so it is retried, and the conversation is not paused. Any
@@ -65,6 +73,8 @@ from inbox_core.handoff import (
     handoff_note,
 )
 from inbox_core.messages import IncomingMessage, OutboundReply
+from inbox_core.notify import Notifications
+from inbox_core.prices import check_prices
 from inbox_core.review import DraftReview
 from inbox_core.store import (
     Conversation,
@@ -82,6 +92,7 @@ from inbox_core.triage import (
     TriageUnavailable,
     decide,
     escalation_reason,
+    is_price_question,
 )
 
 __all__ = [
@@ -116,6 +127,11 @@ Decision = Literal[
 UNAVAILABLE = "unavailable"
 HOLDING_KIND = "holding"
 
+UNSTATED_PRICE = "the reply states a price that no knowledge entry it cites states"
+"""Why a reply was handed off under ``published_prices_only``."""
+PRICE_APPROVAL = "a price needs approval"
+UNSTATED_PRICE_APPROVAL = "a price no cited entry states needs approval"
+
 
 @dataclass(frozen=True)
 class Escalation:
@@ -146,7 +162,10 @@ class AuditRecord:
     ``at`` is naive UTC in ISO format. ``delivery`` is ``none``, ``held``,
     ``sent``, ``failed`` or empty when nothing was attempted.
     ``handoff_failures`` names the best-effort hand-off steps that failed
-    (see :mod:`inbox_core.handoff`).
+    (see :mod:`inbox_core.handoff`), and ``notification`` when a notification
+    could not be sent. ``notifications`` lists each notification attempted as
+    ``<event>:<outcome>``, such as ``hand_off:sent``, ``draft_held:quiet`` or
+    ``hand_off:failed``.
     """
 
     at: str
@@ -168,6 +187,7 @@ class AuditRecord:
     guard: str
     tags: tuple[str, ...]
     handoff_failures: tuple[str, ...] = ()
+    notifications: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         """A JSON-ready dictionary."""
@@ -175,6 +195,7 @@ class AuditRecord:
         data["sources"] = list(self.sources)
         data["tags"] = list(self.tags)
         data["handoff_failures"] = list(self.handoff_failures)
+        data["notifications"] = list(self.notifications)
         return data
 
 
@@ -279,7 +300,9 @@ class _Draft:
     guard: str = ""
     tags: tuple[str, ...] = ()
     handoff_failures: list[str] = field(default_factory=list)
+    notifications: list[str] = field(default_factory=list)
     lease_owner: str = ""
+    escalate_to: Tier | None = None
 
     @property
     def titles(self) -> dict[str, str]:
@@ -312,6 +335,7 @@ class _Draft:
             guard=self.guard,
             tags=self.tags,
             handoff_failures=tuple(self.handoff_failures),
+            notifications=tuple(self.notifications),
         )
 
 
@@ -326,6 +350,10 @@ class Pipeline:
     :func:`inbox_core.delivery.parse_mode`. ``handoff_actions`` is the
     channel's shared-inbox side of a hand-off (see :mod:`inbox_core.handoff`);
     without it nothing beyond the holding message and the notifier happens.
+    ``notifications`` (see :mod:`inbox_core.notify`, usually from
+    :func:`inbox_core.notify.build_notifications`) announces finished
+    hand-offs and held drafts, best effort; unlike ``notifier``, its failure
+    never leaves a message unhandled.
 
     Concurrency: each call takes the conversation's lease in the store before
     it reads or changes anything in that conversation, waiting up to
@@ -352,6 +380,7 @@ class Pipeline:
         guards: Iterable[Guard] | None = None,
         mode_override: DeliveryMode | None = None,
         handoff_actions: HandOffActions | None = None,
+        notifications: Notifications | None = None,
         lease_ttl: timedelta = timedelta(seconds=120),
         lease_wait: float = 10.0,
         lease_poll: float = 0.05,
@@ -373,6 +402,7 @@ class Pipeline:
         self._audit = audit
         self._guards = tuple(guards) if guards is not None else default_guards()
         self._actions = handoff_actions if handoff_actions is not None else NoHandOffActions()
+        self._notifications = notifications
         if lease_ttl <= timedelta(0) or lease_wait < 0 or lease_poll <= 0:
             raise ValueError("lease_ttl and lease_poll must be positive, lease_wait not negative")
         self._lease_ttl = lease_ttl
@@ -522,6 +552,9 @@ class Pipeline:
             if reason is None:
                 return
             draft.reason = reason
+            if draft.escalate_to is not None:
+                decision = decision.with_tier(draft.escalate_to)
+                draft.tier = decision.tier
         elif decision.classifier == UNAVAILABLE:
             draft.reason = "classifier unavailable"
         else:
@@ -584,6 +617,34 @@ class Pipeline:
         if result.outcome == "hand_off":
             return result.reason
 
+        approval_reason = HANDLER_APPROVAL
+        requires_approval = result.requires_approval
+        if not requires_approval and decision.category in self._config.delivery.approval_categories:
+            requires_approval = True
+            approval_reason = f"category {decision.category} needs approval"
+        policy = self._config.triage
+        if policy.answers_prices:
+            price_question = is_price_question(decision, policy)
+            check = check_prices(
+                result.text,
+                (source.passage for source in result.sources),
+                price_question=price_question,
+            )
+            if check.unstated:
+                draft.tags = (*result.tags, "price:unstated")
+            elif check.states_prices:
+                draft.tags = (*result.tags, "price:stated")
+            if check.unstated and policy.prices == "published_prices_only":
+                draft.escalate_to = "needs_executive"
+                return UNSTATED_PRICE
+            if (
+                policy.prices == "draft_for_approval"
+                and (price_question or check.states_prices)
+                and not requires_approval
+            ):
+                requires_approval = True
+                approval_reason = UNSTATED_PRICE_APPROVAL if check.unstated else PRICE_APPROVAL
+
         text = result.text
         if self._config.delivery.show_sources:
             text = with_public_links(
@@ -600,11 +661,6 @@ class Pipeline:
         )
         draft.sources = reply.sources
         draft.cited = result.sources
-        approval_reason = HANDLER_APPROVAL
-        requires_approval = result.requires_approval
-        if not requires_approval and decision.category in self._config.delivery.approval_categories:
-            requires_approval = True
-            approval_reason = f"category {decision.category} needs approval"
         try:
             delivered = self._deliver_once(
                 conversation,
@@ -632,6 +688,8 @@ class Pipeline:
         self._store.mark_handled(row.id, draft.decision)
         if delivered.action == "sent":
             self._note_sources(message, decision, draft)
+        elif delivered.action == "held":
+            self._notify("draft_held", message, decision.tier, delivered.held_because, draft)
         return None
 
     def _note_sources(
@@ -781,6 +839,41 @@ class Pipeline:
         self._store.pause(conversation.id, f"{tier}: {draft.reason}"[:256])
         self._store.mark_handled(row.id, "handed_off")
         draft.decision = "handed_off"
+        self._notify("hand_off", message, tier, draft.reason, draft)
+
+    def _notify(
+        self,
+        event: Literal["hand_off", "draft_held"],
+        message: IncomingMessage,
+        tier: str,
+        reason: str,
+        draft: _Draft,
+    ) -> None:
+        """Announce a finished hand-off or held draft. Best effort, after everything else."""
+        if self._notifications is None:
+            return
+        try:
+            outcome = self._notifications.notify(
+                event,
+                channel=message.channel,
+                thread_key=message.thread_key,
+                conversation_id=draft.conversation_id,
+                category=draft.category or self._config.triage.fallback_category,
+                tier=tier or "needs_admin",
+                reason=reason,
+            )
+        except Exception as exc:
+            draft.handoff_failures.append("notification")
+            draft.notifications.append(f"{event}:failed")
+            logger.warning(
+                "notification %s failed for %s: %s",
+                event,
+                message.provider_message_id,
+                type(exc).__name__,
+            )
+            return
+        if outcome != "off":
+            draft.notifications.append(f"{event}:{outcome}")
 
     def _ensure_bot_owns(self, conversation_id: int) -> None:
         """Raise :class:`_PersonTookOver` if a person replied since processing began."""

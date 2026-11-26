@@ -671,6 +671,7 @@ class TestAuditRecord:
             "guard",
             "tags",
             "handoff_failures",
+            "notifications",
         }
         dumped = json.dumps(as_dict)
         assert "opening hours" not in dumped.lower()

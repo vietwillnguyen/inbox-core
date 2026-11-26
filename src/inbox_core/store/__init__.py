@@ -300,6 +300,33 @@ class ConversationStore(Protocol):
         """
         ...
 
+    def held_before(self, before: datetime) -> tuple[StoredMessage, ...]:
+        """Every reply still ``held`` for a person, created before ``before``, oldest first.
+
+        ``before`` may be aware or naive UTC.
+        """
+        ...
+
+    def paused_before(self, before: datetime) -> tuple[Conversation, ...]:
+        """Every conversation still paused after a hand-off since before ``before``, oldest first.
+
+        A conversation a person replied in (``paused_manual``) is not listed:
+        someone already has it. ``before`` may be aware or naive UTC.
+        """
+        ...
+
+    def claim_reminder(self, key: str) -> bool:
+        """Record that a reminder for ``key`` is being sent. False if one already was.
+
+        Atomic, across processes for a shared database, so two reminder runs
+        never both send the same one. ``key`` is at most 160 characters.
+        """
+        ...
+
+    def release_reminder(self, key: str) -> None:
+        """Forget a claimed reminder whose send failed, so the next run tries again."""
+        ...
+
 
 class StoreSendCaps:
     """Send caps counted from the store, so they survive restarts and hold across processes.

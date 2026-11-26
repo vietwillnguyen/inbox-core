@@ -36,6 +36,7 @@ CORE_LOGGERS: tuple[str, ...] = (
     "inbox_core.guards",
     "inbox_core.shadow",
     "inbox_core.store",
+    "inbox_core.notify",
 )
 """Every logger the core writes through, named explicitly so the list is a decision."""
 

@@ -140,22 +140,20 @@ class LiteLLMClassifier:
 
 def _schema(config: ClientConfig) -> dict[str, Any]:
     policy = config.triage
+    properties: dict[str, Any] = {
+        "category": {"type": "string", "enum": [rule.name for rule in policy.categories]},
+        "language": {"type": "string", "enum": [*policy.languages, "other"]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "asks_for_human": {"type": "boolean"},
+        "mentions_money_or_commitment": {"type": "boolean"},
+    }
+    if policy.answers_prices:
+        # Asked only of a client that answers prices; the schema is otherwise unchanged.
+        properties["asks_listed_price"] = {"type": "boolean"}
     return {
         "type": "object",
-        "properties": {
-            "category": {"type": "string", "enum": [rule.name for rule in policy.categories]},
-            "language": {"type": "string", "enum": [*policy.languages, "other"]},
-            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-            "asks_for_human": {"type": "boolean"},
-            "mentions_money_or_commitment": {"type": "boolean"},
-        },
-        "required": [
-            "category",
-            "language",
-            "confidence",
-            "asks_for_human",
-            "mentions_money_or_commitment",
-        ],
+        "properties": properties,
+        "required": list(properties),
         "additionalProperties": False,
     }
 
