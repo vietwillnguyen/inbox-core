@@ -22,7 +22,8 @@ A message comes in from any channel and takes the same steps:
 Every message produces one audit record with ids and decisions and no content.
 
 It is a library, not a service.
-It has no channel code: a Gmail adapter, a Chatwoot connection or a web widget plugs in through two small protocols.
+The core has no channel code: a Gmail adapter, a Chatwoot connection or a web widget plugs in through two small protocols.
+One connection ships with it as an optional extra: [the Chatwoot connection](docs/chatwoot.md), which runs the core as a Chatwoot agent bot with a draft-review tab.
 
 ## What it guarantees, and what it does not
 
@@ -33,6 +34,7 @@ It guarantees, and its tests check:
 - **`off` delivers nothing and `draft` never sends.** There is exactly one code path that can send to the public, and a test walks the package source to keep it that way.
 - **No message content in the core's logs, exceptions, notifications or audit records.** A reusable privacy sweep checks this, and you can run it against your own corpus and wiring.
 - **Stored text is encrypted** (AES-256-GCM with key rotation), and content can be deleted while the record of what happened is kept.
+- **Replies never name their sources, and the sources are always kept for staff.** A grounded answer's knowledge entries are recorded in the audit record and the held draft, and a channel with a shared inbox posts them as a staff-only note after an answer is sent; the text the public sees never has a source id or title. A client that opts in with `delivery.show_sources = true` gets one line linking to the public pages of the entries that name one (`More: https://...`), and nothing else.
 - **A message is skipped only once it was handled**, not merely seen, so a crash does not silently drop it; and a delivery that may have happened is never repeated.
 
 It does not guarantee:
@@ -40,8 +42,9 @@ It does not guarantee:
 - **That an answer is correct.** A grounded answer uses only retrieved knowledge entries and refuses when nothing relevant is found, but a model can still misread an entry. Measure it with the groundedness runner before turning on `auto`, and use `draft` mode first.
 - **That the classifier is accurate.** The tier rules make low confidence and sensitive categories safe, but a classifier that confidently mislabels a sensitive message as an FAQ will be answered. That is what the triage evaluation and its 100 percent executive-recall gate are for.
 - **Anything about your code.** Your channel adapter, your own logging and your hosting are yours; run the privacy sweep over them.
-- **Retention.** The store deletes content when asked; it does not decide when.
+- **Retention, unless you schedule it.** The store deletes content when asked, and `inbox_core.retention` is the job that asks (content older than N days, keeping the skeleton); running it on a schedule is yours.
 - **Exactly-once sending under every crash.** If a process dies after a reply leaves but before it is recorded, the next attempt hands off to a person rather than risk a second send.
+- **One worker per conversation across machines with unsynchronised clocks.** Processing of a conversation is serialised by a lease in the store, across threads with any store and across processes with the SQL store; the lease's expiry is read from each worker's clock (see [`docs/design.md`](docs/design.md)).
 - **Shared limits across processes for the in-memory parts.** The flood guard and `InMemorySendCaps` are per process; use `StoreSendCaps` for caps that hold across processes and restarts.
 
 ## Install
@@ -53,7 +56,7 @@ uv add "inbox-core[litellm,sqlalchemy,yaml] @ git+https://github.com/vietwillngu
 ```
 
 The core needs only `cryptography`.
-Extras: `litellm` (the LiteLLM classifier and generator), `jev` (the Jev classifier), `sqlalchemy` (the SQL store), `yaml` (YAML configuration files).
+Extras: `litellm` (the LiteLLM classifier and generator), `jev` (the Jev classifier), `sqlalchemy` (the SQL store), `yaml` (YAML configuration files), `chatwoot` (the Chatwoot connection, the only extra with a web framework).
 
 ## A configuration
 
@@ -120,6 +123,17 @@ record = pipeline.process(incoming_message)
 ```
 
 A channel provides two things: a parser into `IncomingMessage`, and a `ReplySink` with `send_to_public` and `hold_for_review`.
+A channel with a shared inbox can also pass `handoff_actions` (a note, labels, an assignee and opening the conversation), call `pipeline.person_replied(...)` when a person answers, and review held drafts through `pipeline.drafts`.
+
+## The Chatwoot connection
+
+```sh
+./deploy/chatwoot/stack.sh up       # Chatwoot CE v4.19.1, the service, a widget page; all on 127.0.0.1
+uv run pytest -m e2e tests/e2e      # the end-to-end suite against it
+```
+
+Webhooks are checked against Chatwoot's signature, held drafts are reviewed in a tab inside the conversation whose agent is verified with Chatwoot, Chatwoot is set to log without visitor text (proved by the suite), and a retention job deletes old transcripts.
+[`docs/chatwoot.md`](docs/chatwoot.md) has the details and the residual risks.
 
 ## A worked example
 
@@ -163,6 +177,8 @@ uv run pytest --cov
 ```
 
 The suite is deterministic, makes no network calls, and keeps coverage at 90 percent or more.
+The end-to-end suite against a local Chatwoot is opt-in (`-m e2e`); see [`docs/chatwoot.md`](docs/chatwoot.md).
+Generated code is regenerated with `uv run python scripts/generate.py`, and CI checks it is current.
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the rules, which matter because this repository is public.
 
 ## Licence and origin

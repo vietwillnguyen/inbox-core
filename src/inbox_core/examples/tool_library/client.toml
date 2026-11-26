@@ -69,6 +69,10 @@ daily_send_cap = 40
 per_sender_daily_cap = 2
 max_bot_replies_per_conversation = 3
 timezone = "Europe/London"
+# Off by default. On, a grounded answer ends with a link to the public page of
+# each entry it used that names one in knowledge.md ("More: https://..."),
+# never an entry's id or title.
+# show_sources = true
 
 [delivery.holding]
 en = "Thanks for writing to the Brambleford Tool Library. A volunteer will read your message and reply here."

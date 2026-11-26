@@ -122,12 +122,49 @@ Built-ins:
 
 - `GroundedAnswer(retriever, generator, min_score=...)` retrieves passages, keeps those scoring at least `min_score`, and asks the generator to answer from them only.
   It returns the ids and titles of the passages it used as `sources`, and hands off when nothing clears the threshold, when the generator returns the refusal sentinel or nothing, and when retrieval or generation fails.
+  The reply text is the generator's alone and never names its sources.
 - `Template(texts)` returns fixed text the client wrote, by language, and hands off rather than answer in a language it has no text for.
   `Template.from_config` reads a `[templates.<name>]` table from the client config.
 - `HandOff()` always hands off; it is the registry's default for any category without a handler.
 
+### Sources: tracked for staff, linked for the public only on request
+
+A reply's sources travel beside its text, never in it.
+On every channel and in every delivery mode, the text sent to the public, or held as a draft for a person to approve, never has a source id or title.
+The sources are kept for staff in three places:
+
+- the audit record's `sources` (ids), for every answered or held reply;
+- the held draft, which the store keeps with its source ids and which the Chatwoot draft tab lists with their titles;
+- a staff-only note through the channel's hand-off actions: the review note of a held draft, and, once an answer is sent automatically, a note with purpose `answered` naming each source's id and title.
+
+The `answered` note is best effort and comes after the answer: a failure is logged by exception type, recorded as `source_note` in `handoff_failures`, and the answer stands.
+Nothing labels, assigns or opens an answered conversation.
+
+A knowledge entry may name the public page it is about, in a `URL:` line (see below) or `KnowledgeEntry(url=...)`.
+The URL must be an absolute `https` URL with a host and no user name or password; anything else is refused when the knowledge is loaded, so a service with a bad URL does not start.
+A client that wants the public to see where an answer comes from sets `show_sources = true` in `[delivery]` (off by default, per client).
+The pipeline then ends a grounded reply with one line linking to the public pages of the sources it used, for example:
+
+```text
+The library is open on Wednesdays from 5pm to 8pm and on Saturdays from 10am to 2pm.
+
+More: https://brambleford-tools.example/visit
+```
+
+Only sources with a URL are linked, each page once, in the order the sources came, separated by ", ".
+Sources without a URL are never mentioned, and a reply whose sources have none gets no line at all.
+An id or title is never shown, in any mode.
+The words before the links are `More:` unless the client sets `[delivery.links_label]`, a table of language = label (one line, at most 40 characters), with the default language's label as the fallback.
+The staff records are the same with the option on or off.
+
+The line is added before delivery decides to send or hold, so it is the same rule for both paths.
+A held draft's text therefore already ends with the line, and the reviewer sees exactly what will be sent and may edit or remove it; an approved draft is sent as the person approved it, with nothing appended after approval.
+With the option off, a held draft has no line and approving it adds none.
+Turning the option on or off affects replies written after the change; a draft already held keeps the text it was held with.
+The groundedness evaluation judges the handler's text against the knowledge entries named in its `sources`, so it does not depend on the text naming them.
+
 `InMemoryRetriever` is BM25 over titles, keywords and text, with no embeddings and no network, for tests, demos and small knowledge bases.
-`load_markdown_knowledge` reads `## <id> <title>` sections, each optionally starting with a `Keywords:` line, which is how an English entry can be found by a question in another language.
+`load_markdown_knowledge` reads `## <id> <title>` sections, each optionally starting with a `Keywords:` line, which is how an English entry can be found by a question in another language, and a `URL:` line naming the entry's public page, in either order.
 `ExtractiveGenerator` returns the best passage verbatim; `adapters.litellm.LiteLLMGenerator` asks a model, under instructions rendered from the client config.
 
 ### How future handlers fit without changing the protocol
@@ -166,6 +203,25 @@ The guarantee that there is exactly one code path to the public is enforced by `
 The delivery section of the configuration defaults to the safe settings: mode `off`, no language signed off for automatic sending, a daily cap of 30, two conversations per sender per day, one bot reply per conversation, and UTC.
 An unknown mode in a configuration file is an error; `parse_mode`, for runtime settings such as an environment variable, reads anything unknown as `off`.
 
+### Held drafts and the acceptance rate
+
+A held reply is a draft waiting for a person, and its text is the outbound row's encrypted content.
+`Pipeline.drafts` is an `inbox_core.review.DraftReview` over the pipeline's store and delivery:
+
+- `pending(conversation_id)` lists drafts with the decision behind them: category, tier, confidence, classifier, sources and `held_because`, which the store now keeps.
+- `send(draft_id, reviewer=..., text=None)` sends a draft as written or edited.
+  It first claims the draft with an atomic compare-and-set (`held` to `reviewing`, one conditional `UPDATE` in SQL), so it is sent at most once across clicks, tabs and processes.
+  The send goes through `Delivery.release_approved`, a second, deliberate way into `Delivery._send`: it refuses under `off` and otherwise sends, without the mode, language and cap gates, because those stop the assistant acting alone and a person approving a specific text is what they defer to.
+  The send is still counted against the caps for later automatic replies.
+  A send that raises is marked `failed` and never retried, because it may or may not have reached the public.
+- `discard` and `expire_before(cutoff)` close a draft without sending it.
+- `outcomes(start, end)` counts `sent_as_written`, `sent_edited`, `discarded` and `expired` by when they were resolved.
+  `acceptance_rate` is sent as written over all resolved drafts, and `sent_rate` counts edited sends too.
+  A whitespace-only change counts as written.
+
+Reviewers are stored as identifiers such as `chatwoot-user:5`, never names or addresses, because the skeleton outlives the content.
+The source-walk tests pin `DraftReview.send` as the only send-shaped public name besides the sinks, and pin that it reaches the public only through `release_approved`.
+
 ## The conversation record
 
 `ConversationStore` is one protocol with two implementations: `store.memory.InMemoryConversationStore` in the core, and `store.sqlalchemy.SqlAlchemyConversationStore` behind the `sqlalchemy` extra.
@@ -186,6 +242,12 @@ Properties every implementation keeps:
 - **No plaintext.** With a `FieldCipher`, inbound subject, text and sender address, and outbound reply text, are stored encrypted, each bound to its column as associated data.
   Without a cipher, no content is stored at all.
 - **Delete content, keep the skeleton.** `erase_conversation` and `erase_sender` remove the encrypted content and set `content_erased_at`, and keep the rows, because dedupe, the caps and the metrics read them.
+
+### Retention
+
+`ConversationStore.erase_content_before(cutoff)` deletes the content of every message created before the cutoff and keeps the rows, like the other erase methods.
+`inbox_core.retention.run_retention(store, days=N)` is the job: it first expires held drafts older than the cutoff (recorded as `expired` by reviewer `retention`), so nobody can approve a reply to a message whose text is going, and then erases the content.
+`python -m inbox_core.retention --database-url URL --days N` runs it once against a SQL store and prints a report of numbers only; erasing needs no encryption key.
 
 `StoreSendCaps` counts the day's sends from the store, so caps survive a restart and hold across processes.
 
@@ -208,6 +270,33 @@ Errors name the setting, the key id and caller-supplied ids, never key material 
 
 Decisions are `duplicate`, `left_for_person`, `dropped`, `skipped`, `answered`, `answer_held`, `handed_off` and `incomplete`.
 
+### Concurrency: one worker per conversation
+
+Two deliveries for one conversation, whether two different messages or the same message delivered twice, must not produce two replies.
+The guarantee: at most one `Pipeline.process` call works on a given conversation at a time.
+
+- Each call takes the conversation's lease in the store (`acquire_lease`) before it reads or changes anything in that conversation, then re-reads under the lease: a message another worker finished meanwhile is a `duplicate`, and the reply count and status are current.
+- In memory the lease is a dictionary entry under the store's lock, so it holds across threads in one process.
+  In SQL it is one conditional `UPDATE` on `inbox_conversations` (`lease_owner`, `lease_expires_at`), so it holds across processes sharing the database; `tests/test_concurrency.py` proves both with real threads and with two spawned processes over one SQLite file.
+- A call waits up to `lease_wait` seconds (default 10); if it still cannot get the lease it returns `busy` with nothing done and the message unhandled, for the caller to retry.
+- A lease expires after `lease_ttl` (default 120 seconds) so a crashed worker does not block a conversation forever.
+  It is renewed immediately before every delivery, and a call that has lost it delivers nothing and is `incomplete`.
+
+What is not guaranteed: lease expiry is read from each worker's clock, so workers on different machines need synchronised clocks, and a worker that stalls for longer than `lease_ttl` between its renewal and the send itself (one network call) could overlap a successor.
+Set `lease_ttl` well above the slowest classifier-plus-handler time, retries included.
+
+### Schema changes in this version
+
+Pre-release tables need these columns added: `inbox_conversations.lease_owner` (string 64) and `lease_expires_at` (datetime), and `inbox_messages.held_because` (string 128), `review_outcome` (string 32), `reviewed_by` (string 64) and `reviewed_at` (datetime, indexed).
+`create_schema` creates them for a new database; there is no migration tool in the package.
+
+### A person replied
+
+`Pipeline.person_replied(channel, thread_key, sender_key, message_id=...)` is the entry point for "a person replied in this conversation".
+It sets the conversation to `paused_manual`, the stronger of the two paused states, and returns an audit record with decision `person_replied`.
+Every later message there is `left_for_person`, without a classifier call, until `Pipeline.resume(channel, thread_key)` gives it back; a hand-off never overrides it.
+A message already being processed when the person replies checks the conversation again right before it delivers anything (an answer or a holding message) and before it hands off, and then stays silent: it is marked handled as `left_for_person`, with nothing sent and nobody notified.
+
 It fails closed in three specific ways:
 
 - A handler that declines or raises, a delivery that fails, delivery being off, and the reply cap all become a hand-off, never a silent drop.
@@ -215,6 +304,19 @@ It fails closed in three specific ways:
 - Any unexpected error is caught, reported to the notifier as `internal error (<type>)`, and left unhandled for a retry.
 
 A failed holding message does not stop the hand-off; a holding message or answer whose earlier attempt did not finish is never repeated.
+
+### Hand-off side effects
+
+A shared inbox such as Chatwoot can do four things when a person must act: add an internal note only staff see, label the conversation, assign it, and open it in a person's queue.
+`inbox_core.handoff.HandOffActions` is that protocol, passed to the pipeline as `handoff_actions`.
+The pipeline calls it for a hand-off (purpose `hand_off`) and for a drafted reply held for review (purpose `review`), in a fixed order: holding message, note, labels, assign, open, notifier, pause.
+After an answer is sent automatically it calls only `add_internal_note` (purpose `answered`), with the answer's sources; see "Sources" above.
+
+- The note, the labels and the assignment are best effort: a failure is logged by exception type and named in the audit record's `handoff_failures`, and the hand-off continues.
+- Opening is what puts the conversation in front of a person, so failing to open fails closed: the message is `incomplete` and retried, and the retry neither repeats the holding message nor counts its own earlier reply against the per-conversation cap.
+- The note and labels are composed by the core from fixed phrases, category and tier names, source ids and the titles the client gave those entries, and numbers (`handoff_note`, `handoff_labels`), so posting them cannot copy what the visitor wrote.
+- Holding a draft for review does not pause the conversation and does not call the notifier; it is not a hand-off.
+  The draft counts as the conversation's bot reply, so with the default cap of one the next message is handed off.
 
 The audit record holds the channel, thread and message ids, the conversation id, category, tier, confidence, classifier, decision, reason, handler, mode, delivery outcome, the reason a reply was held, source ids, the guard and the handler's tags.
 It holds no text, subject or address, and the reasons are built from fixed phrases, category names and numbers.
@@ -246,3 +348,18 @@ A golden set is a TOML or YAML list of cases validated against the client's conf
 Every `auto_answer` case needs `must_mention` facts, or the judge has nothing to check.
 
 The runners take their model-backed parts as arguments, so they are tested in CI with fakes; `python -m inbox_core.evals` builds the real LiteLLM ones on demand, and its tests inject a fake completion so the whole command runs offline.
+
+## The Chatwoot connection
+
+`inbox_core.chatwoot` is installed with the `chatwoot` extra and is the only part of the package that brings a web framework; the core never imports it, and a test checks that in a fresh interpreter.
+[`chatwoot.md`](chatwoot.md) is the operator's guide; this section records the decisions.
+
+- **Generated, not hand-written.** The service's own HTTP surface is `src/inbox_core/chatwoot/openapi.yaml`; its models and a router that delegates every operation to a `ServiceApi` interface are generated by fastapi-code-generator with a template in `codegen/service`.
+  The Chatwoot client is generated by openapi-python-client from Chatwoot's spec at the pinned tag, cut to the operations the connection calls, with an overlay for what Chatwoot serves but its spec omits.
+  `scripts/generate.py --check` runs in CI.
+- **Signature first, then Chatwoot's own copy.** Chatwoot v4.19.1 signs agent-bot webhooks, so the HMAC is the authenticity check.
+  The service then re-reads the conversation with the bot token (the only read a bot token is allowed) and, when the message is the latest, acts on Chatwoot's copy of it.
+- **The store is the review queue.** `ChatwootReplySink.hold_for_review` sends nothing; the held reply is already the outbound row's encrypted content, the review hand-off opens the conversation, and the draft tab reads and resolves drafts through `DraftReview`.
+  The service therefore requires an encryption key.
+- **One more send path, pinned.** The tab's send operation (`ServiceApi.send_draft`, `ChatwootService.send_draft`) and the sink's transport (`ChatwootApi.send_message`) are send-shaped names the delivery tests list explicitly; `tests/chatwoot/test_send_paths.py` checks that the transport is called only from the sink's `send_to_public`, that the tab reaches the public only through `DraftReview.send`, and that the service-level fallback holding message goes through `Delivery.deliver`.
+- **Never 429 or 500 to Chatwoot.** Chatwoot logs a retried webhook's whole payload at `warn`, so every verified webhook is answered 200 and handled in the background, and validation errors are answered with fixed phrases instead of FastAPI's input echo.

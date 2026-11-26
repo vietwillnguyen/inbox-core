@@ -94,6 +94,12 @@ class TestConversations:
         assert store.get_conversation(first.id) == first
         assert store.get_conversation(9999) is None
 
+    def test_find_never_creates(self, store: Any) -> None:
+        assert store.find_conversation("web", "t-1") is None
+        created = store.conversation_for("web", "t-1", "s" * 64)
+        assert store.find_conversation("web", "t-1") == created
+        assert store.find_conversation("email", "t-1") is None
+
     def test_pause_resume_and_manual_pause_is_the_stronger_state(self, store: Any) -> None:
         conversation = store.conversation_for("web", "t1", "k")
         store.pause(conversation.id, "needs_admin: asked for a person")

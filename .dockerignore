@@ -1,0 +1,10 @@
+# The service image is built from the repository root. Send the builder only
+# what deploy/chatwoot/Dockerfile copies; never .env files, .local/ or .git.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!NOTICE
+!src/
+**/__pycache__

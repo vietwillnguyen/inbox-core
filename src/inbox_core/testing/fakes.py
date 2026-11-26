@@ -9,11 +9,18 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from inbox_core.handoff import HandOffRequest
 from inbox_core.messages import IncomingMessage, OutboundReply
 from inbox_core.pipeline import Escalation
 from inbox_core.triage import TriageSignals, TriageUnavailable
 
-__all__ = ["FakeClassifier", "RecordingNotifier", "RecordingSink", "signals"]
+__all__ = [
+    "FakeClassifier",
+    "RecordingHandOff",
+    "RecordingNotifier",
+    "RecordingSink",
+    "signals",
+]
 
 
 def signals(
@@ -85,3 +92,29 @@ class RecordingNotifier:
         if self.fail:
             raise ConnectionError("notifier unavailable")
         self.escalations.append(escalation)
+
+
+@dataclass
+class RecordingHandOff:
+    """A :class:`inbox_core.handoff.HandOffActions` that records each step and its request."""
+
+    calls: list[tuple[str, HandOffRequest]] = field(default_factory=list)
+
+    def _step(self, name: str, request: HandOffRequest) -> None:
+        self.calls.append((name, request))
+
+    def add_internal_note(self, request: HandOffRequest) -> None:
+        """Record the note."""
+        self._step("add_internal_note", request)
+
+    def add_labels(self, request: HandOffRequest) -> None:
+        """Record the labels."""
+        self._step("add_labels", request)
+
+    def assign(self, request: HandOffRequest) -> None:
+        """Record the assignment."""
+        self._step("assign", request)
+
+    def open_for_person(self, request: HandOffRequest) -> None:
+        """Record the opening."""
+        self._step("open_for_person", request)

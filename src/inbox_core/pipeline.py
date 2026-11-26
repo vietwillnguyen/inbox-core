@@ -11,7 +11,12 @@ Every message takes the same steps, in this order:
 5. **Handle and deliver.** Only an ``auto_answer`` message reaches a handler,
    and only within the per-conversation reply cap. Its reply goes through
    :class:`inbox_core.delivery.Delivery`, which applies the mode, the language
-   gate and the caps.
+   gate and the caps. The reply never names the knowledge entries it was
+   written from: they go into the audit record's ``sources``, the held draft,
+   and, once an answer is sent, a staff-only note through the channel's
+   hand-off actions. A client that sets ``delivery.show_sources`` gets one
+   line linking to the entries' public pages instead (see
+   :func:`with_public_links`), never an id or title.
 6. **Hand off.** Everything else - an escalating tier, a handler that declined
    or failed, a failed delivery, delivery being off - is handed to a person: a
    holding message (through the same delivery rules), a notification, and the
@@ -31,18 +36,28 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
 from inbox_core.config import ClientConfig
 from inbox_core.delivery import Delivery, DeliveryMode, DeliveryResult, ReplySink, Route, SendCaps
 from inbox_core.guards import Guard, default_guards, run_guards
-from inbox_core.handlers import HandlerRegistry, HandlerRequest
+from inbox_core.handlers import HandlerRegistry, HandlerRequest, Source
+from inbox_core.handoff import (
+    HandOffActions,
+    HandOffPurpose,
+    HandOffRequest,
+    NoHandOffActions,
+    handoff_labels,
+    handoff_note,
+)
 from inbox_core.messages import IncomingMessage, OutboundReply
+from inbox_core.review import DraftReview
 from inbox_core.store import (
     Conversation,
     ConversationStore,
@@ -71,6 +86,7 @@ __all__ = [
     "LoggingAuditSink",
     "Notifier",
     "Pipeline",
+    "with_public_links",
 ]
 
 logger = logging.getLogger("inbox_core.pipeline")
@@ -84,8 +100,10 @@ Decision = Literal[
     "answer_held",
     "handed_off",
     "incomplete",
+    "person_replied",
+    "busy",
 ]
-"""What the pipeline did with a message."""
+"""What the pipeline did with a message; ``person_replied`` comes from ``person_replied``."""
 
 UNAVAILABLE = "unavailable"
 HOLDING_KIND = "holding"
@@ -119,6 +137,8 @@ class AuditRecord:
 
     ``at`` is naive UTC in ISO format. ``delivery`` is ``none``, ``held``,
     ``sent``, ``failed`` or empty when nothing was attempted.
+    ``handoff_failures`` names the best-effort hand-off steps that failed
+    (see :mod:`inbox_core.handoff`).
     """
 
     at: str
@@ -139,12 +159,14 @@ class AuditRecord:
     sources: tuple[str, ...]
     guard: str
     tags: tuple[str, ...]
+    handoff_failures: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         """A JSON-ready dictionary."""
         data = asdict(self)
         data["sources"] = list(self.sources)
         data["tags"] = list(self.tags)
+        data["handoff_failures"] = list(self.handoff_failures)
         return data
 
 
@@ -193,6 +215,22 @@ class LoggingAuditSink:
         self._logger.log(self._level, "audit %s", json.dumps(record.to_dict(), sort_keys=True))
 
 
+def with_public_links(text: str, sources: Sequence[Source], label: str) -> str:
+    """``text`` with one line linking to its sources' public pages, if any have one.
+
+    Only sources with a ``url`` are linked, each page once, in the order the
+    sources came; the line is ``label`` and the links (``More: https://...``).
+    No id or title is ever added, and with no page there is no line. The
+    pipeline applies this, when the client sets ``delivery.show_sources``,
+    before delivery decides to send or hold, so a held draft shows the reviewer
+    the line and the text a person approves is the text sent.
+    """
+    links = list(dict.fromkeys(source.url for source in sources if source.url))
+    if not links:
+        return text
+    return f"{text}\n\n{label} {', '.join(links)}"
+
+
 class _Incomplete(Exception):  # noqa: N818 - private control flow, not an error type
     """A person could not be told. The message stays unhandled for a retry."""
 
@@ -203,6 +241,13 @@ class _Incomplete(Exception):  # noqa: N818 - private control flow, not an error
 
 class _Unfinished(Exception):  # noqa: N818 - private control flow, not an error type
     """An earlier attempt to deliver this reply did not finish; do not repeat it."""
+
+
+class _PersonTookOver(Exception):  # noqa: N818 - private control flow, not an error type
+    """A person replied while this message was being processed; stay silent."""
+
+
+PERSON_REPLIED = "a person replied in this conversation"
 
 
 @dataclass
@@ -222,8 +267,15 @@ class _Draft:
     delivery: str = ""
     held_because: str = ""
     sources: tuple[str, ...] = ()
+    cited: tuple[Source, ...] = ()
     guard: str = ""
     tags: tuple[str, ...] = ()
+    handoff_failures: list[str] = field(default_factory=list)
+    lease_owner: str = ""
+
+    @property
+    def titles(self) -> dict[str, str]:
+        return {source.id: source.title for source in self.cited}
 
     def take(self, decision: TriageDecision) -> None:
         self.category = decision.category
@@ -251,6 +303,7 @@ class _Draft:
             sources=self.sources,
             guard=self.guard,
             tags=self.tags,
+            handoff_failures=tuple(self.handoff_failures),
         )
 
 
@@ -262,7 +315,19 @@ class Pipeline:
     :func:`inbox_core.guards.default_guards`; pass your own list (usually the
     defaults plus channel guards) to change it. ``mode_override`` replaces the
     configured mode, for a runtime switch read with
-    :func:`inbox_core.delivery.parse_mode`.
+    :func:`inbox_core.delivery.parse_mode`. ``handoff_actions`` is the
+    channel's shared-inbox side of a hand-off (see :mod:`inbox_core.handoff`);
+    without it nothing beyond the holding message and the notifier happens.
+
+    Concurrency: each call takes the conversation's lease in the store before
+    it reads or changes anything in that conversation, waiting up to
+    ``lease_wait`` seconds (polling every ``lease_poll``), and holds it for at
+    most ``lease_ttl`` unless renewed. A call that cannot get it returns
+    ``busy`` with nothing done, and the message stays unhandled for a retry.
+    The lease is renewed immediately before every delivery, and a call that
+    lost it delivers nothing (``incomplete``). ``lease_ttl`` must exceed the
+    longest a call can take between two deliveries (classifier retries
+    included); see ``docs/design.md``.
     """
 
     def __init__(
@@ -278,6 +343,10 @@ class Pipeline:
         caps: SendCaps | None = None,
         guards: Iterable[Guard] | None = None,
         mode_override: DeliveryMode | None = None,
+        handoff_actions: HandOffActions | None = None,
+        lease_ttl: timedelta = timedelta(seconds=120),
+        lease_wait: float = 10.0,
+        lease_poll: float = 0.05,
         classifier_attempts: int = 3,
         backoff: tuple[float, ...] = (0.5, 2.0),
         sleep: Callable[[float], object] = time.sleep,
@@ -295,6 +364,13 @@ class Pipeline:
         self._notifier = notifier
         self._audit = audit
         self._guards = tuple(guards) if guards is not None else default_guards()
+        self._actions = handoff_actions if handoff_actions is not None else NoHandOffActions()
+        if lease_ttl <= timedelta(0) or lease_wait < 0 or lease_poll <= 0:
+            raise ValueError("lease_ttl and lease_poll must be positive, lease_wait not negative")
+        self._lease_ttl = lease_ttl
+        self._lease_wait = lease_wait
+        self._lease_poll = lease_poll
+        self._sleep = sleep
         self._clock = clock
         self._mode = mode_override if mode_override is not None else policy.mode
         self._delivery = Delivery(
@@ -311,6 +387,11 @@ class Pipeline:
                 clock=clock,
             ),
         )
+
+    @property
+    def drafts(self) -> DraftReview:
+        """Held drafts in this pipeline's store, released through this pipeline's delivery."""
+        return DraftReview(self._store, self._delivery)
 
     def process(self, message: IncomingMessage) -> AuditRecord:
         """Take one message through every step. Always returns its audit record."""
@@ -351,6 +432,37 @@ class Pipeline:
             message.channel, message.thread_key, message.sender_key
         )
         draft.conversation_id = conversation.id
+        owner = secrets.token_hex(8)
+        if not self._acquire(conversation.id, owner):
+            draft.decision = "busy"
+            draft.reason = "another worker is processing this conversation"
+            return
+        draft.lease_owner = owner
+        try:
+            self._run_leased(message, conversation.id, draft)
+        finally:
+            store.release_lease(conversation.id, owner)
+
+    def _acquire(self, conversation_id: int, owner: str) -> bool:
+        waited = 0.0
+        while True:
+            if self._store.acquire_lease(conversation_id, owner, ttl=self._lease_ttl):
+                return True
+            if waited >= self._lease_wait:
+                return False
+            self._sleep(self._lease_poll)
+            waited += self._lease_poll
+
+    def _run_leased(self, message: IncomingMessage, conversation_id: int, draft: _Draft) -> None:
+        store = self._store
+        # Re-read under the lease: another worker may have finished this very
+        # message, or answered in this conversation, while we waited.
+        if store.is_handled(message.channel, message.provider_message_id):
+            draft.decision = "duplicate"
+            return
+        conversation = store.get_conversation(conversation_id)
+        if conversation is None:
+            raise LookupError("conversation vanished")
         row = store.record_inbound(conversation.id, message)
 
         if conversation.status != "bot":
@@ -359,6 +471,22 @@ class Pipeline:
             draft.reason = "a person owns this conversation"
             return
 
+        try:
+            self._decide_and_act(message, conversation, row, draft)
+        except _PersonTookOver:
+            store.mark_handled(row.id, "left_for_person")
+            draft.decision = "left_for_person"
+            draft.reason = "a person replied while this message was processed"
+            draft.delivery = ""
+
+    def _decide_and_act(
+        self,
+        message: IncomingMessage,
+        conversation: Conversation,
+        row: StoredMessage,
+        draft: _Draft,
+    ) -> None:
+        store = self._store
         guarded = run_guards(self._guards, message)
         if guarded is not None:
             draft.guard = guarded.guard
@@ -425,7 +553,11 @@ class Pipeline:
         if self._mode is DeliveryMode.OFF:
             return "delivery is off"
         cap = self._config.delivery.max_bot_replies_per_conversation
-        if conversation.bot_reply_count >= cap:
+        # A retry of this same message resumes its own earlier reply (which
+        # _deliver_once reports rather than repeats), so that reply must not
+        # count against the cap it already passed.
+        resuming = any(m.kind != HOLDING_KIND for m in self._store.outbound_for(row.id))
+        if conversation.bot_reply_count >= cap and not resuming:
             return f"bot reply cap reached ({cap} per conversation)"
 
         handler = self._handlers.for_category(decision.category)
@@ -444,22 +576,30 @@ class Pipeline:
         if result.outcome == "hand_off":
             return result.reason
 
+        text = result.text
+        if self._config.delivery.show_sources:
+            text = with_public_links(
+                text, result.sources, self._config.links_label(decision.language)
+            )
         reply = OutboundReply(
             thread_key=message.thread_key,
             in_reply_to=message.provider_message_id,
             to_address=message.sender_address,
-            text=result.text,
+            text=text,
             language=decision.language,
             kind=result.kind,
             sources=tuple(source.id for source in result.sources),
         )
         draft.sources = reply.sources
+        draft.cited = result.sources
         try:
             delivered = self._deliver_once(
-                conversation, row, reply, requires_approval=result.requires_approval
+                conversation, row, reply, draft, requires_approval=result.requires_approval
             )
         except _Unfinished:
             return "an earlier delivery attempt did not finish"
+        except (_PersonTookOver, _Incomplete):
+            raise
         except Exception as exc:
             logger.warning(
                 "delivery failed for %s: %s", message.provider_message_id, type(exc).__name__
@@ -468,15 +608,53 @@ class Pipeline:
 
         draft.delivery = delivered.action
         draft.held_because = delivered.held_because
+        if delivered.action == "held":
+            self._bring_in_a_person("review", message, decision.tier, delivered.held_because, draft)
         draft.decision = "answered" if delivered.action == "sent" else "answer_held"
         self._store.mark_handled(row.id, draft.decision)
+        if delivered.action == "sent":
+            self._note_sources(message, decision, draft)
         return None
+
+    def _note_sources(
+        self, message: IncomingMessage, decision: TriageDecision, draft: _Draft
+    ) -> None:
+        """A staff-only note of what a sent answer was based on. Best effort."""
+        if not draft.sources:
+            return
+        request = HandOffRequest(
+            purpose="answered",
+            channel=message.channel,
+            thread_key=message.thread_key,
+            message_id=message.provider_message_id,
+            conversation_id=draft.conversation_id,
+            category=decision.category,
+            tier=decision.tier,
+            reason="",
+            labels=(),
+            note=handoff_note(
+                "answered",
+                category=decision.category,
+                tier=decision.tier,
+                reason="",
+                sources=draft.sources,
+                titles=draft.titles,
+            ),
+        )
+        try:
+            self._actions.add_internal_note(request)
+        except Exception as exc:
+            draft.handoff_failures.append("source_note")
+            logger.warning(
+                "source note failed for %s: %s", message.provider_message_id, type(exc).__name__
+            )
 
     def _deliver_once(
         self,
         conversation: Conversation,
         row: StoredMessage,
         reply: OutboundReply,
+        draft: _Draft,
         *,
         requires_approval: bool = False,
     ) -> DeliveryResult:
@@ -487,6 +665,7 @@ class Pipeline:
         unfinished or failed one raises :class:`_Unfinished`: it may or may not
         have reached the public, and the safe reading is "do not send again".
         """
+        self._ensure_bot_owns(conversation.id)
         earlier = [m for m in self._store.outbound_for(row.id) if m.kind == reply.kind]
         if earlier:
             last = earlier[-1]
@@ -494,12 +673,16 @@ class Pipeline:
                 raise _Unfinished
             if last.action == "sent":
                 return DeliveryResult(Route.SEND, "sent", last.provider_ref, "")
-            if last.action == "held":
+            if last.action in ("held", "reviewing", "discarded", "expired"):
                 return DeliveryResult(
                     Route.HOLD, "held", last.provider_ref, "held on an earlier attempt"
                 )
             return DeliveryResult(Route.NONE, "none", None, "delivery is off")
 
+        if draft.lease_owner and not self._store.renew_lease(
+            conversation.id, draft.lease_owner, ttl=self._lease_ttl
+        ):
+            raise _Incomplete("lost the conversation lease before delivering")
         outbound = self._store.begin_outbound(
             conversation.id,
             reply_to_id=row.id,
@@ -516,7 +699,10 @@ class Pipeline:
             self._store.finish_outbound(outbound.id, action="failed", provider_ref=None)
             raise
         self._store.finish_outbound(
-            outbound.id, action=result.action, provider_ref=result.provider_ref
+            outbound.id,
+            action=result.action,
+            provider_ref=result.provider_ref,
+            held_because=result.held_because,
         )
         return result
 
@@ -547,11 +733,13 @@ class Pipeline:
                 kind=HOLDING_KIND,
             )
             try:
-                delivered = self._deliver_once(conversation, row, holding)
+                delivered = self._deliver_once(conversation, row, holding, draft)
                 draft.delivery = delivered.action
                 draft.held_because = delivered.held_because
             except _Unfinished:
                 draft.delivery = "none"
+            except (_PersonTookOver, _Incomplete):
+                raise
             except Exception as exc:
                 # A failed holding message must not stop the hand-off itself.
                 draft.delivery = "failed"
@@ -562,6 +750,8 @@ class Pipeline:
                 )
 
         tier: Tier = decision.tier
+        self._ensure_bot_owns(conversation.id)
+        self._bring_in_a_person("hand_off", message, tier, draft.reason, draft)
         try:
             self._notifier.notify(self._escalation(message, draft, tier))
         except Exception as exc:
@@ -569,6 +759,116 @@ class Pipeline:
         self._store.pause(conversation.id, f"{tier}: {draft.reason}"[:256])
         self._store.mark_handled(row.id, "handed_off")
         draft.decision = "handed_off"
+
+    def _ensure_bot_owns(self, conversation_id: int) -> None:
+        """Raise :class:`_PersonTookOver` if a person replied since processing began."""
+        current = self._store.get_conversation(conversation_id)
+        if current is not None and current.status == "paused_manual":
+            raise _PersonTookOver
+
+    def person_replied(
+        self, channel: str, thread_key: str, sender_key: str, *, message_id: str
+    ) -> AuditRecord:
+        """Record that a person replied in this conversation; the bot stays silent there.
+
+        Every later message in the conversation is ``left_for_person`` until
+        :meth:`resume`. A message already being processed checks again right
+        before it delivers anything, so the bot does not answer over the
+        person. ``sender_key`` is the visitor's, used only if the conversation
+        is new to the store. ``message_id`` is the person's message, for the
+        audit record. Returns that record, with decision ``person_replied``.
+        """
+        incoming = IncomingMessage(
+            channel=channel,
+            thread_key=thread_key,
+            provider_message_id=message_id,
+            sender_key=sender_key,
+            sender_address="",
+            text="",
+        )
+        draft = _Draft(incoming, self._mode.value)
+        try:
+            conversation = self._store.conversation_for(channel, thread_key, sender_key)
+            draft.conversation_id = conversation.id
+            self._store.pause_manual(conversation.id)
+            draft.decision = "person_replied"
+            draft.reason = PERSON_REPLIED
+        except Exception as exc:
+            draft.decision = "incomplete"
+            draft.reason = f"internal error ({type(exc).__name__})"
+            logger.error("person reply %s: internal error %s", message_id, type(exc).__name__)
+        record = draft.freeze(self._clock())
+        try:
+            self._audit.emit(record)
+        except Exception as exc:
+            logger.error("audit sink failed for %s: %s", message_id, type(exc).__name__)
+        return record
+
+    def resume(self, channel: str, thread_key: str) -> bool:
+        """Give a conversation back to the bot. A person's decision; False if it is unknown.
+
+        The bot reply count is kept, so resuming does not reset the
+        per-conversation cap.
+        """
+        found = self._store.find_conversation(channel, thread_key)
+        if found is None:
+            return False
+        self._store.resume(found.id)
+        return True
+
+    def _bring_in_a_person(
+        self,
+        purpose: HandOffPurpose,
+        message: IncomingMessage,
+        tier: str,
+        reason: str,
+        draft: _Draft,
+    ) -> None:
+        """Run the channel's hand-off steps in order; only failing to open is fatal."""
+        category = draft.category or self._config.triage.fallback_category
+        request = HandOffRequest(
+            purpose=purpose,
+            channel=message.channel,
+            thread_key=message.thread_key,
+            message_id=message.provider_message_id,
+            conversation_id=draft.conversation_id,
+            category=category,
+            tier=tier or "needs_admin",
+            reason=reason,
+            labels=handoff_labels(
+                purpose, category, classifier_unavailable=draft.classifier == UNAVAILABLE
+            ),
+            note=handoff_note(
+                purpose,
+                category=category,
+                tier=tier or "needs_admin",
+                reason=reason,
+                sources=draft.sources,
+                titles=draft.titles,
+            ),
+        )
+        actions = self._actions
+        for name, step in (
+            ("add_internal_note", actions.add_internal_note),
+            ("add_labels", actions.add_labels),
+            ("assign", actions.assign),
+        ):
+            try:
+                step(request)
+            except Exception as exc:
+                draft.handoff_failures.append(name)
+                logger.warning(
+                    "hand-off step %s failed for %s: %s",
+                    name,
+                    message.provider_message_id,
+                    type(exc).__name__,
+                )
+        try:
+            actions.open_for_person(request)
+        except Exception as exc:
+            raise _Incomplete(
+                f"could not open the conversation for a person ({type(exc).__name__})"
+            ) from None
 
     def _escalation(self, message: IncomingMessage, draft: _Draft, tier: str) -> Escalation:
         return Escalation(

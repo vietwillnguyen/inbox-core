@@ -78,6 +78,18 @@ class TestAuthentication:
         with pytest.raises(DecryptionError, match="failed authentication"):
             FieldCipher({"k1": key()}, "k1").decrypt(token, "c")
 
+    def test_an_empty_string_round_trips(self) -> None:
+        # A web chat message has no subject; its empty subject is still sealed
+        # and must open again.
+        cipher = FieldCipher({"k1": secrets.token_bytes(32)}, "k1")
+        assert cipher.decrypt(cipher.encrypt("", "ctx"), "ctx") == ""
+
+    def test_a_payload_shorter_than_nonce_and_tag_is_truncated(self) -> None:
+        cipher = FieldCipher({"k1": secrets.token_bytes(32)}, "k1")
+        short = base64.urlsafe_b64encode(b"x" * 27).decode()
+        with pytest.raises(DecryptionError, match="truncated"):
+            cipher.decrypt(f"icenc:v1:k1:{short}", "ctx")
+
     @pytest.mark.parametrize(
         ("token", "problem"),
         [

@@ -24,6 +24,7 @@ from inbox_core.delivery import (
     DeliveryMode,
     DeliveryResult,
     InMemorySendCaps,
+    ReleaseRefusedError,
     ReplySink,
     Route,
     SendCaps,
@@ -216,11 +217,30 @@ class TestTheOnlyPathToThePublic:
         # implementations inside the package are pinned too: the protocol
         # itself and the recording fake for tests. A real sink in the core
         # would show up here and need a deliberate decision.
+        # DraftReview.send is the one deliberate exception: a person approving
+        # a held draft. It reaches the public only through
+        # Delivery.release_approved (pinned below), never through a sink.
         others = {name for name in shaped if not name.endswith(".send_to_public")}
-        assert others == set()
+        assert others == {
+            "inbox_core.review.DraftReview.send",
+            "inbox_core.chatwoot.api.ChatwootApi.send_message",
+            "inbox_core.chatwoot._service_api.routes.ServiceApi.send_draft",
+            "inbox_core.chatwoot.service.ChatwootService.send_draft",
+        }
+        #
+        # The Chatwoot connection adds three, each pinned by a test below or in
+        # tests/chatwoot/test_send_paths.py: its sink's transport
+        # (ChatwootApi.send_message, called only by its send_to_public) and
+        # the draft tab's send operation, generated and implemented, which
+        # reaches the public only through DraftReview.send.
         assert shaped == {
             "inbox_core.delivery.ReplySink.send_to_public",
+            "inbox_core.review.DraftReview.send",
             "inbox_core.testing.fakes.RecordingSink.send_to_public",
+            "inbox_core.chatwoot.sink.ChatwootReplySink.send_to_public",
+            "inbox_core.chatwoot.api.ChatwootApi.send_message",
+            "inbox_core.chatwoot._service_api.routes.ServiceApi.send_draft",
+            "inbox_core.chatwoot.service.ChatwootService.send_draft",
         }
 
     def test_send_to_public_is_called_from_exactly_one_place(self) -> None:
@@ -239,6 +259,34 @@ class TestTheOnlyPathToThePublic:
     def test_the_one_call_site_is_reached_only_after_the_route_is_send(self) -> None:
         source = inspect.getsource(Delivery.deliver)
         assert source.index("Route.SEND") < source.index("self._send(")
+
+    def test_only_deliver_and_release_approved_reach_the_call_site(self) -> None:
+        # A person approving a held draft is the second, deliberate way to the
+        # public. It still goes through Delivery._send, and refuses under off.
+        tree = ast.parse(inspect.getsource(Delivery).lstrip())
+        callers = sorted(
+            enclosing(tree, node)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_send"
+        )
+        assert callers == ["Delivery.deliver", "Delivery.release_approved"]
+        source = inspect.getsource(Delivery.release_approved)
+        assert source.index("DeliveryMode.OFF") < source.index("self._send(")
+
+    def test_release_approved_refuses_under_off_and_sends_otherwise(self) -> None:
+        for mode in DeliveryMode:
+            sink, caps = RecordingSink(), FixedCaps(allowed=False)
+            delivery = Delivery(sink, mode=mode, auto_languages=frozenset(), caps=caps)
+            if mode is DeliveryMode.OFF:
+                with pytest.raises(ReleaseRefusedError):
+                    delivery.release_approved(reply("es"), sender_key="s")
+                assert sink.sent == []
+                continue
+            result = delivery.release_approved(reply("es"), sender_key="s")
+            assert (result.action, result.provider_ref) == ("sent", "out-1")
+            assert caps.recorded == [("s", "t-1")]
 
 
 def send_shaped(name: str) -> bool:

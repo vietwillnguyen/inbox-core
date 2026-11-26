@@ -18,13 +18,16 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+from urllib.parse import urlsplit
 
 __all__ = [
     "DEFAULT_STOPWORDS",
+    "MAX_URL_LENGTH",
     "InMemoryRetriever",
     "KnowledgeEntry",
     "Passage",
     "Retriever",
+    "is_public_url",
     "load_markdown_knowledge",
 ]
 
@@ -118,18 +121,61 @@ the intent of the question (opening hours, location).
 """
 
 
+MAX_URL_LENGTH = 2048
+"""The longest public URL an entry may carry."""
+
+_URL_UNSAFE = re.compile(r"[\s\x00-\x1f\x7f<>\"`]")
+
+
+def is_public_url(value: object) -> bool:
+    """Whether ``value`` is an absolute https URL fit to show the public.
+
+    It needs the ``https`` scheme and a host, and may not carry a user name or
+    password, white space, control characters, or more than
+    :data:`MAX_URL_LENGTH` characters.
+    """
+    if not isinstance(value, str) or not value or len(value) > MAX_URL_LENGTH:
+        return False
+    if _URL_UNSAFE.search(value):
+        return False
+    try:
+        parts = urlsplit(value)
+        port_ok = parts.port is None or parts.port > 0
+    except ValueError:
+        return False
+    return (
+        parts.scheme == "https"
+        and bool(parts.hostname)
+        and parts.username is None
+        and parts.password is None
+        and port_ok
+    )
+
+
 @dataclass(frozen=True)
 class KnowledgeEntry:
     """One entry in a client's knowledge base.
 
     ``keywords`` are extra search terms, such as the same idea in another
-    language, indexed but never shown to the sender.
+    language, indexed but never shown to the sender. ``url`` is the optional
+    public page the entry is about (an absolute https URL, see
+    :func:`is_public_url`). It is the only part of an entry a reply may show
+    the public, and only when the client sets ``delivery.show_sources``; the
+    id and title are for staff.
     """
 
     id: str
     title: str
     text: str = field(repr=False)
     keywords: tuple[str, ...] = ()
+    url: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.url is not None and not is_public_url(self.url):
+            raise ValueError(
+                f"knowledge entry {self.id!r}: url must be an absolute https URL "
+                "with a host and no user name or password"
+            )
 
 
 @dataclass(frozen=True)
@@ -209,14 +255,17 @@ class InMemoryRetriever:
 
 
 _KEYWORDS = re.compile(r"^keywords:\s*(.*)$", re.IGNORECASE)
+_URL = re.compile(r"^url:\s*(.*)$", re.IGNORECASE)
 
 
 def load_markdown_knowledge(path: str | Path) -> tuple[KnowledgeEntry, ...]:
     """Entries from a Markdown file of ``## <id> <title>`` sections.
 
     Text before the first ``##`` heading is ignored. A section may start with a
-    ``Keywords: a, b`` line. Raises ValueError for a missing title, an empty
-    section, a duplicate id, or a file with no entries.
+    ``Keywords: a, b`` line and a ``URL: https://...`` line, in either order:
+    the URL is the entry's public page. Raises ValueError for a missing title,
+    an empty section, a duplicate id, a URL that is not an absolute https URL,
+    or a file with no entries.
     """
     source = Path(path)
     entries: list[KnowledgeEntry] = []
@@ -228,15 +277,25 @@ def load_markdown_knowledge(path: str | Path) -> tuple[KnowledgeEntry, ...]:
             raise ValueError(f"{source.name}: entry {entry_id!r} has no title")
         lines = body.strip().splitlines()
         keywords: tuple[str, ...] = ()
-        if lines and (match := _KEYWORDS.match(lines[0].strip())):
-            keywords = tuple(word.strip() for word in match.group(1).split(",") if word.strip())
+        url: str | None = None
+        for _ in range(2):
+            head_line = lines[0].strip() if lines else ""
+            if not keywords and (match := _KEYWORDS.match(head_line)):
+                keywords = tuple(word.strip() for word in match.group(1).split(",") if word.strip())
+            elif url is None and (match := _URL.match(head_line)):
+                url = match.group(1).strip()
+            else:
+                break
             lines = lines[1:]
         text = "\n".join(lines).strip()
         if not text:
             raise ValueError(f"{source.name}: entry {entry_id!r} is empty")
         if any(entry.id == entry_id for entry in entries):
             raise ValueError(f"{source.name}: duplicate entry id {entry_id!r}")
-        entries.append(KnowledgeEntry(entry_id, title.strip(), text, keywords))
+        try:
+            entries.append(KnowledgeEntry(entry_id, title.strip(), text, keywords, url))
+        except ValueError as exc:
+            raise ValueError(f"{source.name}: {exc}") from None
     if not entries:
         raise ValueError(f"{source.name}: no entries (expected '## <id> <title>' sections)")
     return tuple(entries)

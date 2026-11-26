@@ -14,7 +14,7 @@ text column.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import (
@@ -30,7 +30,9 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    func,
     insert,
+    or_,
     select,
     update,
 )
@@ -42,9 +44,11 @@ from inbox_core.messages import IncomingMessage
 from inbox_core.store import (
     BODY_CONTEXT,
     BOT_REPLY_ACTIONS,
+    REVIEW_ACTIONS,
     SENDER_CONTEXT,
     SUBJECT_CONTEXT,
     Conversation,
+    ReviewOutcome,
     StoredMessage,
     as_naive_utc,
 )
@@ -67,6 +71,8 @@ conversations = Table(
     Column("bot_reply_count", Integer, nullable=False, default=0),
     Column("created_at", DateTime, nullable=False),
     Column("updated_at", DateTime, nullable=False),
+    Column("lease_owner", String(64), nullable=True),
+    Column("lease_expires_at", DateTime, nullable=True),
     UniqueConstraint("channel", "thread_key", name="uq_inbox_conversations_thread"),
 )
 
@@ -92,6 +98,10 @@ messages = Table(
     Column("created_at", DateTime, nullable=False, index=True),
     Column("handled_at", DateTime, nullable=True),
     Column("content_erased_at", DateTime, nullable=True),
+    Column("held_because", String(128), nullable=True),
+    Column("review_outcome", String(32), nullable=True),
+    Column("reviewed_by", String(64), nullable=True),
+    Column("reviewed_at", DateTime, nullable=True, index=True),
     Column("subject_encrypted", Text, nullable=True),
     Column("body_encrypted", Text, nullable=True),
     Column("sender_address_encrypted", Text, nullable=True),
@@ -140,6 +150,10 @@ def _message(row: RowMapping) -> StoredMessage:
         handled_at=row["handled_at"],
         content_erased_at=row["content_erased_at"],
         has_content=row["body_encrypted"] is not None,
+        held_because=row["held_because"],
+        review_outcome=row["review_outcome"],
+        reviewed_by=row["reviewed_by"],
+        reviewed_at=row["reviewed_at"],
     )
 
 
@@ -215,6 +229,15 @@ class SqlAlchemyConversationStore:
                 .mappings()
                 .first()
             )
+        return None if row is None else _conversation(row)
+
+    def find_conversation(self, channel: str, thread_key: str) -> Conversation | None:
+        """The conversation for this thread, if it exists."""
+        query = select(conversations).where(
+            conversations.c.channel == channel, conversations.c.thread_key == thread_key
+        )
+        with self._engine.begin() as connection:
+            row = connection.execute(query).mappings().first()
         return None if row is None else _conversation(row)
 
     def _inbound_query(self, channel: str, provider_message_id: str) -> Any:
@@ -309,14 +332,16 @@ class SqlAlchemyConversationStore:
             new_id = result.inserted_primary_key[0] if result.inserted_primary_key else None
             return _message(self._one(connection, messages, int(new_id or 0)))
 
-    def finish_outbound(self, message_id: int, *, action: str, provider_ref: str | None) -> None:
+    def finish_outbound(
+        self, message_id: int, *, action: str, provider_ref: str | None, held_because: str = ""
+    ) -> None:
         """Record the delivery outcome; ``held`` and ``sent`` count as a bot reply."""
         with self._engine.begin() as connection:
             row = self._one(connection, messages, message_id)
             connection.execute(
                 update(messages)
                 .where(messages.c.id == message_id)
-                .values(action=action, provider_ref=provider_ref)
+                .values(action=action, provider_ref=provider_ref, held_because=held_because or None)
             )
             if action in BOT_REPLY_ACTIONS:
                 connection.execute(
@@ -324,6 +349,117 @@ class SqlAlchemyConversationStore:
                     .where(conversations.c.id == row["conversation_id"])
                     .values(bot_reply_count=conversations.c.bot_reply_count + 1)
                 )
+
+    def get_message(self, message_id: int) -> StoredMessage | None:
+        """The message with this id, if any."""
+        with self._engine.begin() as connection:
+            row = (
+                connection.execute(select(messages).where(messages.c.id == message_id))
+                .mappings()
+                .first()
+            )
+        return None if row is None else _message(row)
+
+    def held_for_review(self, conversation_id: int) -> tuple[StoredMessage, ...]:
+        """Held outbound replies in the conversation, oldest first."""
+        query = (
+            select(messages)
+            .where(
+                messages.c.conversation_id == conversation_id,
+                messages.c.direction == "outbound",
+                messages.c.action == "held",
+            )
+            .order_by(messages.c.id)
+        )
+        with self._engine.begin() as connection:
+            return tuple(_message(row) for row in connection.execute(query).mappings())
+
+    def claim_held(self, message_id: int) -> bool:
+        """``held`` to ``reviewing`` in one conditional UPDATE; one caller wins."""
+        with self._engine.begin() as connection:
+            result = connection.execute(
+                update(messages)
+                .where(
+                    messages.c.id == message_id,
+                    messages.c.direction == "outbound",
+                    messages.c.action == "held",
+                )
+                .values(action="reviewing")
+            )
+            return int(result.rowcount or 0) == 1
+
+    def resolve_review(
+        self,
+        message_id: int,
+        *,
+        outcome: ReviewOutcome,
+        reviewer: str,
+        provider_ref: str | None = None,
+        text: str | None = None,
+    ) -> None:
+        """Finish a ``reviewing`` draft."""
+        values: dict[str, object] = {
+            "action": REVIEW_ACTIONS[outcome],
+            "review_outcome": outcome,
+            "reviewed_by": reviewer,
+            "reviewed_at": self._now(),
+        }
+        if provider_ref is not None:
+            values["provider_ref"] = provider_ref
+        with self._engine.begin() as connection:
+            row = self._one(connection, messages, message_id)
+            if row["action"] != "reviewing":
+                raise ValueError(f"message id={message_id} is not being reviewed")
+            if text is not None and row["body_encrypted"] is not None:
+                values["body_encrypted"] = self._seal(text, BODY_CONTEXT)
+            connection.execute(
+                update(messages)
+                .where(messages.c.id == message_id, messages.c.action == "reviewing")
+                .values(**values)
+            )
+
+    def fail_review(self, message_id: int) -> None:
+        """``reviewing`` to ``failed``."""
+        with self._engine.begin() as connection:
+            self._one(connection, messages, message_id)
+            connection.execute(
+                update(messages)
+                .where(messages.c.id == message_id, messages.c.action == "reviewing")
+                .values(action="failed")
+            )
+
+    def expire_held(self, before: datetime, *, reviewer: str) -> int:
+        """Expire held replies created before ``before``."""
+        with self._engine.begin() as connection:
+            result = connection.execute(
+                update(messages)
+                .where(
+                    messages.c.direction == "outbound",
+                    messages.c.action == "held",
+                    messages.c.created_at < as_naive_utc(before),
+                )
+                .values(
+                    action="expired",
+                    review_outcome="expired",
+                    reviewed_by=reviewer,
+                    reviewed_at=self._now(),
+                )
+            )
+            return int(result.rowcount or 0)
+
+    def review_outcomes_between(self, start: datetime, end: datetime) -> dict[str, int]:
+        """Outcome counts over ``[start, end)`` of ``reviewed_at``."""
+        query = (
+            select(messages.c.review_outcome, func.count())
+            .where(
+                messages.c.review_outcome.is_not(None),
+                messages.c.reviewed_at >= as_naive_utc(start),
+                messages.c.reviewed_at < as_naive_utc(end),
+            )
+            .group_by(messages.c.review_outcome)
+        )
+        with self._engine.begin() as connection:
+            return {str(row[0]): int(row[1]) for row in connection.execute(query)}
 
     def outbound_for(self, reply_to_id: int) -> tuple[StoredMessage, ...]:
         """Outbound rows answering this inbound row, oldest first."""
@@ -431,6 +567,48 @@ class SqlAlchemyConversationStore:
         with self._engine.begin() as connection:
             self._one(connection, conversations, conversation_id)
             return self._erase(connection, messages.c.conversation_id == conversation_id)
+
+    def acquire_lease(self, conversation_id: int, owner: str, *, ttl: timedelta) -> bool:
+        """Take the lease in one conditional UPDATE, so one caller wins across processes."""
+        now = self._now()
+        c = conversations.c
+        with self._engine.begin() as connection:
+            result = connection.execute(
+                update(conversations)
+                .where(
+                    c.id == conversation_id,
+                    or_(c.lease_owner.is_(None), c.lease_owner == owner, c.lease_expires_at <= now),
+                )
+                .values(lease_owner=owner, lease_expires_at=now + ttl)
+            )
+            return int(result.rowcount or 0) == 1
+
+    def renew_lease(self, conversation_id: int, owner: str, *, ttl: timedelta) -> bool:
+        """Extend the lease if still held by ``owner`` and not expired."""
+        now = self._now()
+        c = conversations.c
+        with self._engine.begin() as connection:
+            result = connection.execute(
+                update(conversations)
+                .where(c.id == conversation_id, c.lease_owner == owner, c.lease_expires_at > now)
+                .values(lease_expires_at=now + ttl)
+            )
+            return int(result.rowcount or 0) == 1
+
+    def release_lease(self, conversation_id: int, owner: str) -> None:
+        """Drop the lease if held by ``owner``."""
+        c = conversations.c
+        with self._engine.begin() as connection:
+            connection.execute(
+                update(conversations)
+                .where(c.id == conversation_id, c.lease_owner == owner)
+                .values(lease_owner=None, lease_expires_at=None)
+            )
+
+    def erase_content_before(self, cutoff: datetime) -> int:
+        """Delete content from every message created before ``cutoff``; keep the rows."""
+        with self._engine.begin() as connection:
+            return self._erase(connection, messages.c.created_at < as_naive_utc(cutoff))
 
     def erase_sender(self, sender_key: str) -> int:
         """Delete content from every message in this sender's conversations."""

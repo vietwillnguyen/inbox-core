@@ -367,14 +367,19 @@ class TestJevClassifier:
 
 
 def test_optional_sdks_are_not_imported_by_the_adapters_or_the_package() -> None:
-    import importlib
+    # In a fresh interpreter: inside the test process another test may already
+    # have imported one of these, which made this check pass or fail by order.
+    import subprocess
 
-    import inbox_core
-
-    importlib.reload(inbox_core)
-    for name in ("litellm", "typesafe_sdk", "sqlalchemy"):
-        if sys.modules.get(name) is not None:
-            pytest.fail(f"{name} was imported")
+    optional = ("litellm", "typesafe_sdk", "sqlalchemy", "fastapi", "starlette", "uvicorn", "httpx")
+    probe = (
+        "import sys, inbox_core, inbox_core.adapters.litellm, inbox_core.adapters.jev;"
+        f"print(','.join(n for n in {optional!r} if n in sys.modules))"
+    )
+    found = subprocess.run(  # noqa: S603 - a fixed probe in this interpreter
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert found == ""
 
 
 @dataclass

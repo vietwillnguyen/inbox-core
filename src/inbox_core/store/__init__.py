@@ -36,10 +36,12 @@ from inbox_core.triage import TriageDecision, TriageSignals
 
 __all__ = [
     "BOT_REPLY_ACTIONS",
+    "REVIEW_OUTCOMES",
     "Conversation",
     "ConversationStatus",
     "ConversationStore",
     "Direction",
+    "ReviewOutcome",
     "StoreSendCaps",
     "StoredMessage",
     "as_naive_utc",
@@ -53,6 +55,24 @@ Direction = Literal["inbound", "outbound"]
 
 BOT_REPLY_ACTIONS = frozenset({"held", "sent"})
 """Outbound actions that count toward a conversation's bot reply count."""
+
+ReviewOutcome = Literal["sent_as_written", "sent_edited", "discarded", "expired"]
+"""What happened to a held draft once a person (or expiry) dealt with it."""
+
+REVIEW_OUTCOMES: tuple[ReviewOutcome, ...] = (
+    "sent_as_written",
+    "sent_edited",
+    "discarded",
+    "expired",
+)
+
+REVIEW_ACTIONS: dict[str, str] = {
+    "sent_as_written": "sent",
+    "sent_edited": "sent",
+    "discarded": "discarded",
+    "expired": "expired",
+}
+"""The outbound action a resolved draft ends in."""
 
 SUBJECT_CONTEXT = "inbox_messages.subject"
 BODY_CONTEXT = "inbox_messages.body"
@@ -92,6 +112,11 @@ class StoredMessage:
 
     ``reply_to_id`` links an outbound row to the inbound row it answers.
     ``has_content`` says whether encrypted content is held for it.
+    ``held_because`` is why delivery held an outbound reply. A held reply is
+    a draft: ``review_outcome``, ``reviewed_by`` (an identifier, never a name)
+    and ``reviewed_at`` say what became of it. A held draft's ``action`` moves
+    from ``held`` to ``reviewing`` while a person sends it, and ends as
+    ``sent``, ``discarded``, ``expired`` or, if sending failed, ``failed``.
     """
 
     id: int
@@ -114,6 +139,10 @@ class StoredMessage:
     handled_at: datetime | None
     content_erased_at: datetime | None
     has_content: bool
+    held_because: str | None = None
+    review_outcome: str | None = None
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
 
 
 @runtime_checkable
@@ -129,6 +158,10 @@ class ConversationStore(Protocol):
 
     def get_conversation(self, conversation_id: int) -> Conversation | None:
         """The conversation with this id, if any."""
+        ...
+
+    def find_conversation(self, channel: str, thread_key: str) -> Conversation | None:
+        """The conversation for this thread, if it exists. Never creates one."""
         ...
 
     def is_handled(self, channel: str, provider_message_id: str) -> bool:
@@ -162,8 +195,50 @@ class ConversationStore(Protocol):
         """An outbound row with action ``pending``, written before delivery is attempted."""
         ...
 
-    def finish_outbound(self, message_id: int, *, action: str, provider_ref: str | None) -> None:
+    def finish_outbound(
+        self, message_id: int, *, action: str, provider_ref: str | None, held_because: str = ""
+    ) -> None:
         """Record what delivery did. ``held`` and ``sent`` count as a bot reply."""
+        ...
+
+    def get_message(self, message_id: int) -> StoredMessage | None:
+        """The message with this id, if any."""
+        ...
+
+    def held_for_review(self, conversation_id: int) -> tuple[StoredMessage, ...]:
+        """Outbound replies in this conversation still ``held`` for a person, oldest first."""
+        ...
+
+    def claim_held(self, message_id: int) -> bool:
+        """Atomically move a ``held`` reply to ``reviewing``. False if it was not ``held``.
+
+        This is the compare-and-set that makes a draft sendable at most once,
+        across threads and, for a shared database, across processes.
+        """
+        ...
+
+    def resolve_review(
+        self,
+        message_id: int,
+        *,
+        outcome: ReviewOutcome,
+        reviewer: str,
+        provider_ref: str | None = None,
+        text: str | None = None,
+    ) -> None:
+        """Finish a ``reviewing`` draft with ``outcome``; ``text`` replaces what is stored."""
+        ...
+
+    def fail_review(self, message_id: int) -> None:
+        """A ``reviewing`` draft's send failed: mark it ``failed``, never to be retried."""
+        ...
+
+    def expire_held(self, before: datetime, *, reviewer: str) -> int:
+        """Expire every ``held`` reply created before ``before`` (naive UTC). Returns the count."""
+        ...
+
+    def review_outcomes_between(self, start: datetime, end: datetime) -> dict[str, int]:
+        """How many drafts ended in each outcome with ``reviewed_at`` in ``[start, end)``."""
         ...
 
     def outbound_for(self, reply_to_id: int) -> tuple[StoredMessage, ...]:
@@ -200,6 +275,29 @@ class ConversationStore(Protocol):
 
     def erase_sender(self, sender_key: str) -> int:
         """Delete the content of every message in this sender's conversations."""
+        ...
+
+    def acquire_lease(self, conversation_id: int, owner: str, *, ttl: timedelta) -> bool:
+        """Take the conversation's processing lease for ``ttl``. False if someone else holds it.
+
+        A lease that has expired can be taken. Taking it again as its owner
+        renews it. With a shared database this is atomic across processes.
+        """
+        ...
+
+    def renew_lease(self, conversation_id: int, owner: str, *, ttl: timedelta) -> bool:
+        """Extend the lease if ``owner`` still holds it. False if it expired and was taken."""
+        ...
+
+    def release_lease(self, conversation_id: int, owner: str) -> None:
+        """Give the lease up, if ``owner`` holds it."""
+        ...
+
+    def erase_content_before(self, cutoff: datetime) -> int:
+        """Delete the content of every message created before ``cutoff``; keep the rows.
+
+        ``cutoff`` may be aware or naive UTC. Returns how many messages lost content.
+        """
         ...
 
 

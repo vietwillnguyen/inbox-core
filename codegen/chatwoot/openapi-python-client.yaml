@@ -1,0 +1,5 @@
+# Configuration for openapi-python-client, used by scripts/generate.py.
+project_name_override: chatwoot_api
+package_name_override: _chatwoot_api
+post_hooks: []
+literal_enums: true
