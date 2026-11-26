@@ -367,3 +367,60 @@ The runners take their model-backed parts as arguments, so they are tested in CI
   The service therefore requires an encryption key.
 - **One more send path, pinned.** The tab's send operation (`ServiceApi.send_draft`, `ChatwootService.send_draft`) and the sink's transport (`ChatwootApi.send_message`) are send-shaped names the delivery tests list explicitly; `tests/chatwoot/test_send_paths.py` checks that the transport is called only from the sink's `send_to_public`, that the tab reaches the public only through `DraftReview.send`, and that the service-level fallback holding message goes through `Delivery.deliver`.
 - **Never 429 or 500 to Chatwoot.** Chatwoot logs a retried webhook's whole payload at `warn`, so every verified webhook is answered 200 and handled in the background, and validation errors are answered with fixed phrases instead of FastAPI's input echo.
+
+## Deployment
+
+How the public demo is hosted, and why.
+The commands are in [`docs/aws.md`](aws.md) and [`docs/demo.md`](demo.md); this section records the decisions behind them (made 2026-11-25 and 2026-11-26).
+
+### Where it runs
+
+- **Public demo: AWS, `us-east-1`, one `t4g.medium` (4 GB, ARM).**
+  The bundle measured about 2 GB, so the 1 GB free instances are too small.
+  AWS was chosen over the Oracle free tier, whose accounts proved hard to get access to, and over cheaper European hosts, because AWS is what clients ask for.
+  The region is a variable and can move later.
+- **Staging: a small machine at home**, running the same bootstrap and deploy agent.
+  Nothing in `deploy/gitops` is AWS-specific; the AWS parts are the Terraform in `deploy/aws` and one secrets step.
+- **Static sites stay where they are.** Marketing pages and static apps are served free by a pages host; only things that need a running server go on the instance.
+
+### Infrastructure as code
+
+- **Terraform**, kept compatible with OpenTofu where that costs nothing, because Terraform is what clients use and ask for.
+- **State** lives in a versioned, encrypted, never-public S3 bucket with native locking, created by its own small configuration first.
+- **A settings change replaces the instance.**
+  That loses the demo's conversations and generated secrets, which is acceptable for a demo that clears itself daily.
+
+### No open ports
+
+- The security group has no inbound rules.
+- Visitors arrive through a **Cloudflare Tunnel**: `cloudflared` connects out, and Traefik routes inside the host without requesting certificates in this mode.
+  Rate limits count visitors by `Cf-Connecting-Ip`, since every request comes from the tunnel.
+- Shell access is through **AWS Systems Manager Session Manager**; there is no SSH key and no port 22.
+- Host names are `demo`, `demo-chat` and `demo-bot` under `vnlabs.dev`, so Cloudflare's free certificate covers them.
+
+### Secrets
+
+- The model key and the tunnel token are **SecureString parameters in Parameter Store**, read at boot by an instance role that may read only those parameters (with an explicit deny on every other one).
+- Terraform refers to the parameters by name and never manages their values, so no secret reaches Terraform state.
+  The one exception is the optional mode where Terraform also creates the tunnel.
+- IMDSv2 is required with a hop limit of 1, so containers cannot reach the instance's credentials.
+
+### Releases: pull-based GitOps
+
+- A systemd timer on the host checks for new `demo-v*` tags, brings the newest one up and runs the smoke test as the gate.
+- A tag that fails is rolled back to the previous one and never retried; a tag whose secrets cannot be read changes nothing and is retried.
+- Nothing needs inbound access, and no cloud credentials live in GitHub.
+- A repository ruleset lets only administrators create, move or delete `demo-v*` tags, since a tag is code that runs on the host.
+
+### Cost
+
+- About 31 USD a month on demand (instance, disk, public IPv4), to be checked with the AWS Pricing Calculator.
+- A budget emails at 80% and 100% of 40 USD and at the forecast.
+- CPU credits are `standard`: under heavy load the demo slows down instead of adding to the bill.
+
+### Models
+
+- The demo uses Gemini Flash-Lite through the LiteLLM gateway, with a daily spend cap that fails closed.
+- On Gemini's free tier, prompts may be used to improve Google's products, which is acceptable for the demo's fictional shop only.
+  Any deployment handling real messages uses a billed project, whose terms exclude that.
+- Other providers, including open models, are a gateway configuration change; they are a fallback, not the default.
