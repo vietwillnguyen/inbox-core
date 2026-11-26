@@ -45,8 +45,12 @@ Everything about the shop is invented; nothing describes a real business, place 
 ## How it behaves
 
 - A question the knowledge base covers is answered.
-  The visitor sees the answer alone, with no knowledge entry ids or titles; the owner sees the entries it was based on in a private note on the conversation (which the widget never shows), in the draft tab for held replies, and in the audit record.
+  The visitor never sees a knowledge entry id or title; the owner sees the entries it was based on in a private note on the conversation (which the widget never shows), in the draft tab for held replies, and in the audit record.
+  The demo turns `delivery.show_sources` on to show the feature: when an entry the answer used names a public page in a `URL:` line, the answer ends with a link to it, such as `More: https://quillmoor-cycles.example/visit`, which the widget shows as a link.
+  Five entries name one (opening hours and where the shop is share a page, rentals, the free class, and gear advice); the pages are on the reserved `.example` domain and do not exist, so the links lead nowhere.
+  An answer from an entry without a page has no line; see "Sources" in [design.md](design.md).
 - Repair advice (`repair_advice`) is drafted and held: the owner sends, edits or discards it from the `inbox-core drafts` tab in the dashboard, and the visitor sees nothing until then (`delivery.approval_categories`).
+  The held draft already ends with its link line, so the owner reviews exactly what the visitor will get.
 - Bookings, questions about an order, refunds, complaints, safety, press, anything that mentions money, anything unsure and anything off-topic get the shop's holding message, which says this is a demo, and the conversation is opened for a person with a staff note saying why.
 - The tier is decided in code from the shop's category table, so a message telling the assistant to ignore its instructions has nothing to change.
 - Every price question goes to a person, because the core escalates any message that mentions money (see [Open questions](#open-questions)).
@@ -284,7 +288,7 @@ uv run pytest -m demo_e2e tests/demo_e2e
 It is marked `demo_e2e`, which the default run deselects, and skips itself if the bundle is not up; CI runs it on every push.
 It posts more than one visitor would from one address, so it runs with raised rate limits and checks that the raised limit holds.
 Everything a visitor or the owner does goes through the proxy.
-It covers: a grounded answer reached through the gateway, with no source shown to the visitor and its sources in a private note and the audit record; the smoke test itself; off-topic questions, a booking and a prompt-injection refund demand passed to a person with the holding message; repair advice held, then sent edited from the tab, and another discarded; what is stored on a contact; uploads refused; which routes are public; the widget's embedding policy; sign-up closed; the reset deleting old conversations and contacts and keeping recent ones; the spend cap failing closed once spent; no visitor text in any container's log; and the rate limit.
+It covers: a grounded answer reached through the gateway, ending with its public link and with no source id or title shown to the visitor, and its sources in a private note and the audit record; the smoke test itself; off-topic questions, a booking and a prompt-injection refund demand passed to a person with the holding message; repair advice held with its link line, then sent edited from the tab, and another discarded; what is stored on a contact; uploads refused; which routes are public; the widget's embedding policy; sign-up closed; the reset deleting old conversations and contacts and keeping recent ones; the spend cap failing closed once spent; no visitor text in any container's log; and the rate limit.
 
 ### The stand-in model
 

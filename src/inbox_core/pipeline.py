@@ -12,9 +12,11 @@ Every message takes the same steps, in this order:
    and only within the per-conversation reply cap. Its reply goes through
    :class:`inbox_core.delivery.Delivery`, which applies the mode, the language
    gate and the caps. The reply never names the knowledge entries it was
-   written from (unless the client sets ``delivery.show_sources``): they go
-   into the audit record's ``sources``, the held draft, and, once an answer is
-   sent, a staff-only note through the channel's hand-off actions.
+   written from: they go into the audit record's ``sources``, the held draft,
+   and, once an answer is sent, a staff-only note through the channel's
+   hand-off actions. A client that sets ``delivery.show_sources`` gets one
+   line linking to the entries' public pages instead (see
+   :func:`with_public_links`), never an id or title.
 6. **Hand off.** Everything else - an escalating tier, a handler that declined
    or failed, a failed delivery, delivery being off - is handed to a person: a
    holding message (through the same delivery rules), a notification, and the
@@ -36,7 +38,7 @@ import json
 import logging
 import secrets
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -92,6 +94,7 @@ __all__ = [
     "LoggingAuditSink",
     "Notifier",
     "Pipeline",
+    "with_public_links",
 ]
 
 logger = logging.getLogger("inbox_core.pipeline")
@@ -218,6 +221,22 @@ class LoggingAuditSink:
     def emit(self, record: AuditRecord) -> None:
         """Log ``record``."""
         self._logger.log(self._level, "audit %s", json.dumps(record.to_dict(), sort_keys=True))
+
+
+def with_public_links(text: str, sources: Sequence[Source], label: str) -> str:
+    """``text`` with one line linking to its sources' public pages, if any have one.
+
+    Only sources with a ``url`` are linked, each page once, in the order the
+    sources came; the line is ``label`` and the links (``More: https://...``).
+    No id or title is ever added, and with no page there is no line. The
+    pipeline applies this, when the client sets ``delivery.show_sources``,
+    before delivery decides to send or hold, so a held draft shows the reviewer
+    the line and the text a person approves is the text sent.
+    """
+    links = list(dict.fromkeys(source.url for source in sources if source.url))
+    if not links:
+        return text
+    return f"{text}\n\n{label} {', '.join(links)}"
 
 
 class _Incomplete(Exception):  # noqa: N818 - private control flow, not an error type
@@ -566,10 +585,10 @@ class Pipeline:
             return result.reason
 
         text = result.text
-        if self._config.delivery.show_sources and result.sources:
-            # The client opted in to showing the public what the reply is based on.
-            named = "; ".join(f"{source.id} {source.title}" for source in result.sources)
-            text = f"{text}\n\nSource: {named}"
+        if self._config.delivery.show_sources:
+            text = with_public_links(
+                text, result.sources, self._config.links_label(decision.language)
+            )
         reply = OutboundReply(
             thread_key=message.thread_key,
             in_reply_to=message.provider_message_id,

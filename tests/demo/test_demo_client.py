@@ -74,7 +74,21 @@ class TestTheShop:
         text = (CLIENT / name).read_text(encoding="utf-8")
         assert re.findall(r"[\w.-]+\.(?:com|org|net|io|uk|dev|co)\b", text) == []
         assert re.findall(r"[\w.+-]+@[\w.-]+", text) == []
-        assert re.findall(r"https?://", text) == []
+        # The only URLs are the shop's made-up public pages, on the reserved .example domain.
+        urls = re.findall(r"\w+://\S+", text)
+        assert all(url.startswith("https://quillmoor-cycles.example/") for url in urls), urls
+
+    def test_answers_link_to_public_pages_and_some_entries_name_one(self) -> None:
+        assert config().delivery.show_sources is True
+        entries = load_markdown_knowledge(CLIENT / "knowledge.md")
+        linked = {entry.id: entry.url for entry in entries if entry.url}
+        assert linked == {
+            "QCW-01": "https://quillmoor-cycles.example/visit",
+            "QCW-02": "https://quillmoor-cycles.example/visit",
+            "QCW-12": "https://quillmoor-cycles.example/rentals",
+            "QCW-22": "https://quillmoor-cycles.example/classes",
+            "QCW-25": "https://quillmoor-cycles.example/guides/gears",
+        }
 
 
 class TestTheStandInClassifies:
@@ -195,3 +209,38 @@ class TestTheRulesFile:
         path.write_text(text)
         with pytest.raises(StandInError, match=problem):
             StandInModel.from_file(path)
+
+
+class TestTheVisitorSeesLinksNotSources:
+    def run(self, question: str) -> tuple[Any, Any]:
+        from inbox_core.pipeline import InMemoryAuditSink, Pipeline
+        from inbox_core.store.memory import InMemoryConversationStore
+        from inbox_core.testing.fakes import (
+            FakeClassifier,
+            RecordingNotifier,
+            RecordingSink,
+            signals,
+        )
+        from tests.helpers import message
+
+        sink = RecordingSink()
+        audit = InMemoryAuditSink()
+        Pipeline(
+            config=config(),
+            classifier=FakeClassifier(default=signals("faq")),
+            handlers=TestTheStandInAnswers().handlers(),
+            sink=sink,
+            store=InMemoryConversationStore(),
+            notifier=RecordingNotifier(),
+            audit=audit,
+        ).process(message(question))
+        return sink, audit.records[-1]
+
+    def test_an_answer_ends_with_its_public_page_and_names_no_entry(self) -> None:
+        sink, record = self.run("What are your opening hours?")
+        (sent,) = sink.sent
+        assert sent.text.startswith("The shop is open Tuesday to Friday")
+        assert sent.text.endswith("\n\nMore: https://quillmoor-cycles.example/visit")
+        assert "QCW-" not in sent.text
+        assert "Opening hours" not in sent.text
+        assert record.sources[0] == "QCW-01"

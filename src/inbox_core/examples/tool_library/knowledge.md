@@ -2,14 +2,17 @@
 
 The Brambleford Tool Library is made up, and so is the town of Brambleford.
 Nothing here describes a real organisation, place or person.
+A few entries name a public page with a `URL:` line, on the reserved `.example` domain.
 
 ## TL-01 Opening hours
 Keywords: when, open, opening, hours, times, closed, today, sunday, monday, tuesday, thursday, friday, horario, abierto, abren, cierran, hora, sábado, sabado, miércoles, miercoles
+URL: https://brambleford-tools.example/visit
 The library is open on Wednesdays from 5pm to 8pm and on Saturdays from 10am to 2pm.
 It is closed on every other day.
 
 ## TL-02 Location
 Keywords: where, address, located, find, entrance, dónde, donde, dirección, direccion, ubicación, ubicacion, encuentra
+URL: https://brambleford-tools.example/visit
 The library is in the old bus depot at 4 Mill Yard, behind the Brambleford market hall.
 The entrance is the green door on the side of the building.
 
@@ -57,6 +60,7 @@ The library has about 400 tools: drills and drivers, sanders, saws, ladders, gar
 
 ## TL-12 Online catalogue
 Keywords: catálogo, catalogo, en línea, en linea, internet, web, buscar
+URL: https://catalogue.brambleford-tools.example/
 The full list of tools, and whether each one is in or out, is in the online catalogue at catalogue.brambleford-tools.example.
 
 ## TL-13 Ladders
@@ -98,6 +102,7 @@ On the first Saturday of each month, volunteers run a repair café from 10am to 
 
 ## TL-21 Workshops
 Keywords: taller, talleres, curso, aprender, clase
+URL: https://brambleford-tools.example/events
 The library runs short evening workshops on basic skills such as putting up shelves, sharpening garden tools and simple bike repairs.
 They are listed on the events page of the website.
 

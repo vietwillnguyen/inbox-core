@@ -28,7 +28,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from inbox_core.delivery import DeliveryMode
 
 __all__ = [
+    "DEFAULT_LINKS_LABEL",
     "ESCALATION_TIERS",
+    "MAX_LINKS_LABEL",
     "CategoryRule",
     "ClientConfig",
     "ConfigError",
@@ -43,6 +45,12 @@ EscalationTier = Literal["needs_admin", "needs_executive", "skip"]
 """Where a category goes when it is not answered automatically."""
 
 ESCALATION_TIERS: tuple[EscalationTier, ...] = ("needs_admin", "needs_executive", "skip")
+
+DEFAULT_LINKS_LABEL = "More:"
+"""The words before a reply's public links when a client sets none."""
+
+MAX_LINKS_LABEL = 40
+"""The longest ``delivery.links_label`` a client may set."""
 
 RESERVED_LANGUAGE = "other"
 """The language code a classifier reports for anything unsupported."""
@@ -289,11 +297,15 @@ class DeliveryPolicy:
     ``approval_categories`` lists auto-answered categories whose replies are
     always held for a person to approve, whatever the mode: the assistant
     drafts, a person sends.
-    ``show_sources`` adds a "Source:" line naming the knowledge entries a
-    reply was written from to the text the public sees. It is off by default:
-    the sources are always kept for staff (the audit record, the draft tab and
-    a channel's staff note), and a client turns this on only to show them to
-    the public as well.
+    ``show_sources`` adds one short line to a grounded reply, linking to the
+    public pages (:attr:`inbox_core.knowledge.KnowledgeEntry.url`) of the
+    entries it was written from, such as "More: https://example.com/returns".
+    Entries without a page are left out, a reply with none gets no line, and
+    an entry's id or title never reaches the public. It is off by default; the
+    sources are always kept for staff (the audit record, the draft tab and a
+    channel's staff note) either way. ``links_label`` is the words before the
+    links, by language; :meth:`ClientConfig.links_label` falls back to the
+    default language's, then to :data:`DEFAULT_LINKS_LABEL`.
     """
 
     mode: DeliveryMode = DeliveryMode.OFF
@@ -305,9 +317,11 @@ class DeliveryPolicy:
     timezone: str = "UTC"
     holding: Mapping[str, str] = field(default_factory=dict)
     show_sources: bool = False
+    links_label: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "holding", MappingProxyType(dict(self.holding)))
+        object.__setattr__(self, "links_label", MappingProxyType(dict(self.links_label)))
         problems = []
         show_sources: object = self.show_sources
         if not isinstance(show_sources, bool):
@@ -332,6 +346,16 @@ class DeliveryPolicy:
         for code, text in self.holding.items():
             if not isinstance(text, str) or not text.strip():
                 problems.append(f"delivery.holding has an empty text for {code!r}")
+        for code, label in self.links_label.items():
+            if not isinstance(label, str) or not label.strip():
+                problems.append(f"delivery.links_label has an empty label for {code!r}")
+            elif "\n" in label or "\r" in label:
+                problems.append(f"delivery.links_label for {code!r} must be one line")
+            elif len(label) > MAX_LINKS_LABEL:
+                problems.append(
+                    f"delivery.links_label for {code!r} must be at most "
+                    f"{MAX_LINKS_LABEL} characters"
+                )
         if problems:
             raise ConfigError(problems)
 
@@ -378,6 +402,8 @@ class ClientConfig:
                     f"delivery.approval_categories names {name!r}, which is never "
                     "auto-answered, so there is no reply to approve"
                 )
+        for code in sorted(set(self.delivery.links_label) - set(languages)):
+            problems.append(f"delivery.links_label has a label for unconfigured language {code!r}")
         if problems:
             raise ConfigError(problems)
 
@@ -385,6 +411,17 @@ class ClientConfig:
         """The holding message for ``language``, else the default language's, else None."""
         holding = self.delivery.holding
         return holding.get(language) or holding.get(self.triage.default_language)
+
+    def links_label(self, language: str) -> str:
+        """The words before a reply's public links, for ``language``.
+
+        The language's own label, else the default language's, else
+        :data:`DEFAULT_LINKS_LABEL`.
+        """
+        labels = self.delivery.links_label
+        return (
+            labels.get(language) or labels.get(self.triage.default_language) or DEFAULT_LINKS_LABEL
+        )
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any], source: str = "configuration") -> ClientConfig:
@@ -476,6 +513,7 @@ class _Reader:
             "holding",
             "approval_categories",
             "show_sources",
+            "links_label",
         )
         table = self.table(data, "delivery", allowed)
         if table is None:
@@ -498,6 +536,9 @@ class _Reader:
         values["approval_categories"] = frozenset(approval)
         if not isinstance(values.get("holding", {}), Mapping):
             self.problems.append("delivery.holding must be a table of language = text")
+            return None
+        if not isinstance(values.get("links_label", {}), Mapping):
+            self.problems.append("delivery.links_label must be a table of language = label")
             return None
         return self._build(lambda: DeliveryPolicy(**values))
 

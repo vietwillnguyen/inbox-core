@@ -23,9 +23,12 @@ def test_a_question_the_shop_covers_gets_a_grounded_answer_through_the_gateway(
     person.say("What are your opening hours?")
     (reply,) = until(person.replies)
     assert "Tuesday to Friday from 8am to 6pm" in reply
-    # The visitor sees the answer alone; what it was based on is kept for the owner.
+    # The visitor sees the answer and a link to the shop's public page for it
+    # (delivery.show_sources is on); the entry's id and title are kept for the owner.
+    assert reply.endswith("\n\nMore: https://quillmoor-cycles.example/visit")
     assert "Source" not in reply
     assert "QCW-" not in reply
+    assert "Opening hours" not in reply
     record = only_record(person)
     assert (record["category"], record["tier"], record["decision"]) == (
         "faq",
