@@ -22,7 +22,7 @@ import httpx
 ROOT = Path(__file__).resolve().parents[2]
 DEPLOY = ROOT / "deploy" / "demo"
 LOCAL = DEPLOY / ".local"
-PROJECT = "inboxcore-demo"
+DEFAULT_PROJECT = "inboxcore-demo"
 
 
 def read_env(name: str) -> dict[str, str]:
@@ -34,13 +34,18 @@ def read_env(name: str) -> dict[str, str]:
     return values
 
 
+def project() -> str:
+    """The compose project demo.sh brought the bundle up as (``DEMO_PROJECT``)."""
+    return read_env("bundle.env").get("DEMO_PROJECT") or DEFAULT_PROJECT
+
+
 def compose(*args: str, timeout: float = 180) -> str:
-    done = subprocess.run(  # noqa: S603 - fixed project name
+    done = subprocess.run(  # noqa: S603 - the bundle's own project
         [  # noqa: S607
             "docker",
             "compose",
             "-p",
-            PROJECT,
+            project(),
             "-f",
             str(DEPLOY / "compose.yaml"),
             "--env-file",

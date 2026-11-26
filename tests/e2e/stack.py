@@ -21,8 +21,6 @@ import httpx
 ROOT = Path(__file__).resolve().parents[2]
 DEPLOY = ROOT / "deploy" / "chatwoot"
 LOCAL = DEPLOY / ".local"
-CHATWOOT = "http://127.0.0.1:3910"
-SERVICE = "http://127.0.0.1:3912"
 
 
 def read_env(name: str) -> dict[str, str]:
@@ -32,6 +30,16 @@ def read_env(name: str) -> dict[str, str]:
             key, _, value = line.partition("=")
             values[key] = value
     return values
+
+
+def _layout() -> dict[str, str]:
+    """The project and ports stack.sh brought the stack up with (``.local/stack.env``)."""
+    return read_env("stack.env") if (LOCAL / "stack.env").exists() else {}
+
+
+PROJECT = _layout().get("STACK_PROJECT", "inboxcore")
+CHATWOOT = f"http://127.0.0.1:{_layout().get('CHATWOOT_PORT', '3910')}"
+SERVICE = f"http://127.0.0.1:{_layout().get('SERVICE_PORT', '3912')}"
 
 
 def stack(*args: str, timeout: float = 300) -> str:
@@ -46,8 +54,8 @@ def stack(*args: str, timeout: float = 300) -> str:
 
 
 def compose(*args: str, timeout: float = 120) -> str:
-    done = subprocess.run(  # noqa: S603 - fixed project name
-        ["docker", "compose", "-p", "inboxcore", "-f", str(DEPLOY / "compose.yaml"), *args],  # noqa: S607
+    done = subprocess.run(  # noqa: S603 - the stack's own project
+        ["docker", "compose", "-p", PROJECT, "-f", str(DEPLOY / "compose.yaml"), *args],  # noqa: S607
         capture_output=True,
         text=True,
         timeout=timeout,

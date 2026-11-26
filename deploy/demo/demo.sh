@@ -136,6 +136,7 @@ DEMO_RATE_CONTACTS_BURST=${DEMO_RATE_CONTACTS_BURST}
 PAGE_ORIGIN=${PAGE_ORIGIN}
 CHAT_ORIGIN=${CHAT_ORIGIN}
 BOT_ORIGIN=${BOT_ORIGIN}
+DEMO_PROJECT=${PROJECT}
 ENV
   # Written in every mode, empty without the tunnel, so the file compose reads exists.
   printf 'TUNNEL_TOKEN=%s\n' "${DEMO_TUNNEL_TOKEN:-}" > .local/tunnel.env
@@ -206,7 +207,6 @@ INBOX_CORE_WEBHOOK_PATH_TOKEN=${INBOX_CORE_WEBHOOK_PATH_TOKEN}
 INBOX_CORE_TAB_SECRET=${INBOX_CORE_TAB_SECRET}
 INBOX_CORE_ENCRYPTION_KEYS=${INBOX_CORE_ENCRYPTION_KEYS}
 INBOX_CORE_DATABASE_URL=sqlite:////data/inbox-core.db
-INBOX_CORE_ASSIGNEE_ID=${CHATWOOT_ADMIN_USER_ID}
 INBOX_CORE_CLASSIFIER=litellm
 INBOX_CORE_MODEL=litellm_proxy/${DEMO_MODEL}
 INBOX_CORE_MODEL_API_BASE=http://litellm:4000
@@ -244,6 +244,8 @@ gateway_up() {
 seed() {
   set -a; . .local/people.env; . .local/secrets.env; set +a
   local fallback="Thanks for writing to Quillmoor Cycle Works. Our assistant is unavailable right now; a person from the shop will read your message. (This is a demo of a made-up shop.)"
+  # Out of hours, Chatwoot itself tells the visitor when a person will be back.
+  local closed="The Quillmoor Cycle Works team is away right now: we are open Tuesday to Friday from 8am to 6pm and on Saturdays from 9am to 4pm (UK time). The assistant can still answer questions about the shop, and a person will pick up anything else when we open. (This is a demo of a made-up shop.)"
   "${COMPOSE[@]}" exec -T \
     -e CHATWOOT_ADMIN_EMAIL -e CHATWOOT_ADMIN_PASSWORD -e TEST_FIXTURES=false \
     -e ORG_NAME="Quillmoor Cycle Works" -e BOT_NAME="Quillmoor assistant" \
@@ -253,6 +255,9 @@ seed() {
     -e BOT_OUTGOING_URL="http://inbox-core:8000/chatwoot/webhook/${INBOX_CORE_WEBHOOK_PATH_TOKEN}" \
     -e DASHBOARD_APP_URL="${BOT_ORIGIN}/tab" \
     -e WIDGET_ORIGIN="${PAGE_ORIGIN}" -e FALLBACK_TEXT="${fallback}" \
+    -e HANDOFF_ASSIGNEE_EMAIL="${CHATWOOT_ADMIN_EMAIL}" \
+    -e BUSINESS_HOURS="tue-fri 08:00-18:00, sat 09:00-16:00" -e BUSINESS_TIMEZONE="Europe/London" \
+    -e OUT_OF_OFFICE_TEXT="${closed}" \
     rails bundle exec rails runner - < ../chatwoot/seed.rb | grep -E '^CHATWOOT_[A-Z_]+=' > .local/tokens.env.new
   mv .local/tokens.env.new .local/tokens.env
   chmod 600 .local/tokens.env
