@@ -58,7 +58,7 @@ Everything about the shop is invented; nothing describes a real business, place 
 - Discounts, haggling ("would you do it for £30?"), refunds, deposits, disputes and custom quotes are not price questions: they get the holding message and go to a person, as before.
 - Bookings, questions about an order, complaints, safety, press, anything unsure and anything off-topic get the shop's holding message, which says this is a demo, and the conversation is opened for a person with a staff note saying why.
 - Chatwoot tells the owner: every hand-off and held draft that nobody has is assigned to the owner once it is open, and Chatwoot notifies them of the assignment (in the dashboard's notifications, and by email or push where those are set up).
-  This is Chatwoot's own automation rule and assignment notifications, set up by the seed; see "Telling a person" in [chatwoot.md](chatwoot.md).
+  This is Chatwoot's own automation rule and assignment notifications, set up by the seed; the bundle does not set `INBOX_CORE_ASSIGNEE_ID`, the other way to do it; see "Telling a person" in [chatwoot.md](chatwoot.md).
 - The inbox has the shop's business hours (Tuesday to Friday 8am to 6pm, Saturday 9am to 4pm, UK time).
   A visitor who writes while the shop is closed gets Chatwoot's out-of-office message once a day, saying when a person will be back, and the assistant still answers what it can.
 - The tier is decided in code from the shop's category table, so a message telling the assistant to ignore its instructions has nothing to change.

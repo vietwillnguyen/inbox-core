@@ -30,7 +30,7 @@ One connection ships with it as an optional extra: [the Chatwoot connection](doc
 
 It guarantees, and its tests check:
 
-- **Prices come from the knowledge base, checked in code.** By default any mention of money goes to a person. A client that sets `triage.prices = "published_prices_only"` gets plain price questions answered, and every price in such a reply must appear, written the same way, in a knowledge entry the reply cites, or the message goes to a person; `draft_for_approval` holds those replies for a person instead. Refunds, discounts, disputes, negotiation and custom quotes always go to a person.
+- **Prices come from the knowledge base, checked in code.** Every price in every reply must appear, written the same way, in a knowledge entry the reply cites, or the message goes to a person (`needs_executive`). This holds for every client and every setting; it is new in this version and changes behaviour for existing clients: an answer, or a template, that states a price the cited knowledge does not was sent before and is now handed off. By default any message that mentions money still goes to a person; a client that sets `triage.prices = "published_prices_only"` gets plain price questions answered, and `draft_for_approval` holds those replies for a person instead. Refunds, discounts, disputes, negotiation and custom quotes always go to a person.
 - **The tier is decided in code.** A model's output can choose a category from the client's table; it cannot choose a tier, a recipient or a delivery mode. A category marked as never auto-answered is never auto-answered, whatever the confidence.
 - **It fails closed.** An unavailable or malformed classifier, a handler that fails, a failed delivery and a reached reply cap all hand the message to a person. If no person could be told, the message is left unhandled so it is retried.
 - **`off` delivers nothing and `draft` never sends.** There is exactly one code path that can send to the public, and a test walks the package source to keep it that way.
@@ -103,6 +103,7 @@ Two optional settings, both off by default so nothing changes for a client that 
 ```toml
 [triage]
 prices = "published_prices_only"   # or "always_hand_off" (the default), or "draft_for_approval"
+# At every level, a reply stating a price no cited entry states goes to a person.
 
 [notifications]                    # needs the notify extra
 urls = ["${INBOX_CORE_NOTIFY_URL}"]   # Apprise URLs; every secret in a ${VARIABLE} from the environment

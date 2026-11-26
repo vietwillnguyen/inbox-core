@@ -82,10 +82,13 @@ Rule 1 sends any mention of money to `needs_executive`, so by default "how much 
 | `prices` | A plain price question | Everything else about money |
 |---|---|---|
 | `always_hand_off` (default) | `needs_executive`, never answered | `needs_executive` |
-| `published_prices_only` | triaged like any other message; answered only if every price in the reply is stated in a passage it cites | `needs_executive` |
+| `published_prices_only` | triaged like any other message, and answered | `needs_executive` |
 | `draft_for_approval` | triaged like any other message; the reply is held for a person to approve | `needs_executive` |
 
-The default changes nothing: the classifier is not asked anything new, its prompt and JSON schema are byte for byte what they were, and a price question is `needs_executive` even if a classifier claims otherwise.
+At every level, the default included, a reply that states a price no passage it cites states is handed off as `needs_executive` (below).
+
+Under the default, the classifier is not asked anything new, its prompt and JSON schema are byte for byte what they were, and a price question is `needs_executive` even if a classifier claims otherwise.
+What does change under the default is the invented-price check: see "Owner decisions" below.
 
 For the other two levels the classifier is asked a fifth question, `asks_listed_price`: is every mention of money only a question about what something usually costs, with no refund, discount, deal, dispute, payment problem, negotiation or custom quote?
 It is a fact about the message, like the other four; `derive_tier` decides what follows.
@@ -102,13 +105,13 @@ After the handler writes the reply and before delivery, the pipeline runs `inbox
 - A **lone marker** (a currency symbol, code or word not part of a figure, as "pounds" in "forty-five pounds") is stated only when the same marker appears in a cited passage. This is how a price written in words is caught.
 - In a reply to a price question, a **bare number** ("a basic service is 45") is stated only when the same number appears in a cited passage.
 
-Anything unstated is the fail-closed reading.
-Under `published_prices_only` the message is handed off as `needs_executive` with the reason `the reply states a price that no knowledge entry it cites states`, and the reply is never delivered or held.
-Under `draft_for_approval` a reply to a price question, and any reply that states a price, is held with `a price needs approval`, or `a price no cited entry states needs approval` when the check failed, so the reviewer knows.
-The check applies to every reply under those two levels, not only to price questions: a model that puts a price into an answer about opening hours is caught too.
+Anything unstated is the fail-closed reading, and it is the same at every level: the message is handed off as `needs_executive` with the reason `the reply states a price that no knowledge entry it cites states`, and the reply is never delivered or held.
+The check applies to every reply of every client, not only to price questions: a model that puts a price into an answer about opening hours is caught too.
+Under `draft_for_approval` a reply that passes the check is still held with `a price needs approval` when it answers a price question or states a price.
+The bare-number rule needs a price question, so it never applies under `always_hand_off`, where there are none.
 A handler that cites nothing (a `Template`) cites no price, so a template that states one is handed off; write prices in the knowledge base instead.
 The audit record's tags say `price:stated` or `price:unstated`; the figures themselves are not recorded.
-`tests/test_price_setting.py` drives all three levels through the pipeline, including a generator that invents a price, writes one in words and answers with a bare number.
+`tests/test_price_setting.py` drives all three levels through the pipeline, including a generator that invents a price, writes one in words and answers with a bare number, and a non-price answer with an invented price under the default.
 
 The golden set takes `expected_asks_listed_price`, which needs `expected_mentions_money`, and the expected tier is recomputed under the client's own `prices`, so a price case cannot pass validation under the wrong setting.
 
@@ -353,11 +356,12 @@ A failed holding message does not stop the hand-off; a holding message or answer
 
 A shared inbox such as Chatwoot can do four things when a person must act: add an internal note only staff see, label the conversation, assign it, and open it in a person's queue.
 `inbox_core.handoff.HandOffActions` is that protocol, passed to the pipeline as `handoff_actions`.
-The pipeline calls it for a hand-off (purpose `hand_off`) and for a drafted reply held for review (purpose `review`), in a fixed order: holding message, note, labels, assign, open, notifier, pause.
+The pipeline calls it for a hand-off (purpose `hand_off`) and for a drafted reply held for review (purpose `review`), in a fixed order: holding message, note, labels, open, assign, notifier, pause.
+The assignment comes after the opening because a shared inbox may not announce an assignment made before: Chatwoot does not notify one made while a conversation is pending, so the older order (assign, then open) told nobody; see "Owner decisions" below.
 After an answer is sent automatically it calls only `add_internal_note` (purpose `answered`), with the answer's sources; see "Sources" above.
 
 - The note, the labels and the assignment are best effort: a failure is logged by exception type and named in the audit record's `handoff_failures`, and the hand-off continues.
-- Opening is what puts the conversation in front of a person, so failing to open fails closed: the message is `incomplete` and retried, and the retry neither repeats the holding message nor counts its own earlier reply against the per-conversation cap.
+- Opening is what puts the conversation in front of a person, so failing to open fails closed: the message is `incomplete` and retried, nothing is assigned, and the retry neither repeats the holding message nor counts its own earlier reply against the per-conversation cap.
 - The note and labels are composed by the core from fixed phrases, category and tier names, source ids and the titles the client gave those entries, and numbers (`handoff_note`, `handoff_labels`), so posting them cannot copy what the visitor wrote.
 - Holding a draft for review does not pause the conversation and does not call the notifier; it is not a hand-off. With `notifications` it is announced as `draft_held`.
   The draft counts as the conversation's bot reply, so with the default cap of one the next message is handed off.
@@ -410,6 +414,27 @@ pytest 9 attaches to loggers that are already non-propagating when a test starts
 `tests/test_privacy_sweep.py` shows the sweep catching a logged body, a logged address, content inside a logged traceback, a non-propagating client logger, content smuggled into a handler's reason (which reaches both the notifier and the audit), and an escaped exception.
 
 The sweep is also available as a fixture with `pytest_plugins = ["inbox_core.testing.pytest_plugin"]`.
+
+## Owner decisions
+
+Decisions the owner made on review, recorded here because each changes behaviour a client could see.
+
+### The invented-price check runs for every client (behaviour change)
+
+`check_prices` runs on every reply at every `triage.prices` level, including the default `always_hand_off`.
+Any reply that states a price no passage it cites states is handed off as `needs_executive`, not sent or held.
+This deliberately changes behaviour for existing clients, Vietnam Hearts included: before this version, under the default, an answer that happened to state a price (a model adding "parking is £5", or a client's template naming a fee) was sent; now it goes to a person.
+A price that is written in the entry the answer cites is still sent.
+A `Template` cites no entry, so a template that states a price now always hands off; move the price into the knowledge base.
+The reason is that a wrong price is a commitment the organisation did not make, and the check is cheap and in code.
+
+### The service opens a conversation before assigning it
+
+The hand-off order is note, labels, open, assign (it was assign, then open).
+Chatwoot does not notify an assignment made while a conversation is pending, so with the old order a Chatwoot client's `INBOX_CORE_ASSIGNEE_ID` was assigned silently and nobody was told.
+Assigning is still best effort, and nothing is assigned when the opening fails.
+The seed's automation rule stays as the alternative for a client that wants Chatwoot to choose the assignee; when both are configured the service's assignee wins, through the `inbox-core-assigns` label (see [chatwoot.md](chatwoot.md), "Telling a person").
+The cost: with inbox auto-assignment on and an agent online, Chatwoot assigns that agent as the conversation opens and the service then reassigns it, so two people are notified; such a client should turn auto-assignment off.
 
 ## Evaluation
 

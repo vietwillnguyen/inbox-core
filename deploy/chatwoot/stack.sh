@@ -113,6 +113,7 @@ seed() {
     -e BOT_OUTGOING_URL="http://inbox-core:8000/chatwoot/webhook/${INBOX_CORE_WEBHOOK_PATH_TOKEN}" \
     -e DASHBOARD_APP_URL="${SERVICE_ORIGIN}/tab" \
     -e WIDGET_ORIGIN="${WIDGET_ORIGIN}" -e FALLBACK_TEXT="${fallback}" \
+    -e HANDOFF_ASSIGNEE_EMAIL="${CHATWOOT_ADMIN_EMAIL}" \
     rails bundle exec rails runner - < seed.rb | grep -E '^CHATWOOT_[A-Z_]+=' > .local/tokens.env.new
   mv .local/tokens.env.new .local/tokens.env
   write_service_env
@@ -136,6 +137,10 @@ INBOX_CORE_TAB_SECRET=${INBOX_CORE_TAB_SECRET}
 INBOX_CORE_ENCRYPTION_KEYS=${INBOX_CORE_ENCRYPTION_KEYS}
 INBOX_CORE_DATABASE_URL=sqlite:////data/inbox-core.db
 INBOX_CORE_AUDIT_PATH=/data/audit.jsonl
+# Both ways of assigning a hand-off are configured, to different people: the
+# service assigns the volunteer, and the seed's rule (which would assign the
+# administrator) stands down for a conversation the service assigns. The
+# end-to-end suite checks that exactly one of them is notified.
 INBOX_CORE_ASSIGNEE_ID=${CHATWOOT_AGENT_USER_ID}
 INBOX_CORE_CLASSIFIER=${INBOX_CORE_CLASSIFIER:-example-keywords}
 INBOX_CORE_CONFIG=/config/client.toml

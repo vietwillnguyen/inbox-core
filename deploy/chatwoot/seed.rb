@@ -14,7 +14,9 @@
 #   HANDOFF_ASSIGNEE_EMAIL  an automation rule assigns every hand-off and held
 #                           draft nobody has yet to this person, which makes
 #                           Chatwoot notify them (in the dashboard, and by email
-#                           and push where those are set up).
+#                           and push where those are set up). It is the
+#                           alternative to the service's INBOX_CORE_ASSIGNEE_ID;
+#                           when both are set, the service's assignee wins.
 #   BUSINESS_HOURS          the inbox's working hours, such as
 #                           "tue-fri 08:00-18:00, sat 09:00-16:00"; days not
 #                           named are closed. With BUSINESS_TIMEZONE (an IANA
@@ -106,7 +108,8 @@ bot.update!(name: bot_name, outgoing_url: bot_url,
 abi = AgentBotInbox.find_or_initialize_by(inbox: inbox)
 abi.update!(account: account, agent_bot: bot, status: :active)
 
-(%w[inbox-core handoff draft-pending classifier-unavailable inbox-core-unavailable] + category_labels).each do |title|
+(%w[inbox-core handoff draft-pending classifier-unavailable inbox-core-unavailable inbox-core-assigns] +
+  category_labels).each do |title|
   account.labels.find_or_create_by!(title: title)
 end
 
@@ -136,13 +139,16 @@ rule.update!(
   ]
 )
 
-# Hand-off alerts. The bot labels a hand-off ("handoff") or a held draft
-# ("draft-pending") and then opens it, and opening it is Chatwoot's
-# conversation_opened event. Chatwoot does not notify an assignment made while
-# a conversation is still pending (app/listeners/notification_listener.rb), so
-# the assignment is made here, once the conversation is open, and only when
-# nobody has it: an agent online that inbox auto-assignment already gave it to
-# is notified by that assignment instead.
+# Hand-off alerts, the alternative to the service's own INBOX_CORE_ASSIGNEE_ID.
+# The bot labels a hand-off ("handoff") or a held draft ("draft-pending") and
+# then opens it, which is Chatwoot's conversation_opened event; this rule then
+# assigns it, so Chatwoot notifies the assignee (it does not notify an
+# assignment made while a conversation is still pending). It skips a
+# conversation nobody needs assigning: one an agent already has (inbox
+# auto-assignment gives it to an agent online as it opens), and one labelled
+# inbox-core-assigns, which the service adds when it assigns the conversation
+# itself right after opening it. So when both are configured the service's
+# assignee wins and nobody is notified twice.
 handoff_rule = AutomationRule.find_or_initialize_by(account: account, name: 'inbox-core hand-off')
 if handoff_assignee_email.empty?
   handoff_rule.destroy if handoff_rule.persisted?
@@ -155,6 +161,7 @@ else
     active: true,
     conditions: [
       { attribute_key: 'labels', filter_operator: 'equal_to', values: %w[handoff draft-pending], query_operator: 'AND' },
+      { attribute_key: 'labels', filter_operator: 'not_equal_to', values: %w[inbox-core-assigns], query_operator: 'AND' },
       { attribute_key: 'assignee_id', filter_operator: 'is_not_present', values: [], query_operator: nil }
     ],
     actions: [{ action_name: 'assign_agent', action_params: [on_call.id] }]
