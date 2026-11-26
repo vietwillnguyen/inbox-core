@@ -22,11 +22,11 @@
 #   down            stop everything, keep the data
 #   destroy         stop and delete this project's containers and volumes (asks first)
 #
-# Every docker command is scoped to the compose project "inboxcore-demo";
+# Every docker command is scoped to the compose project "inboxcore-demo"
+# (DEMO_PROJECT in the settings names another, for a second copy on one machine);
 # nothing here touches any other container, volume or network.
 set -euo pipefail
 cd "$(dirname "$0")"
-PROJECT=inboxcore-demo
 ENV_FILE=${DEMO_ENV_FILE:-.env}
 
 rand() { python3 -c "import secrets,sys; print(secrets.token_urlsafe(int(sys.argv[1])))" "$1"; }
@@ -108,6 +108,8 @@ load_settings() {
   fi
   DEMO_PUBLIC_HTTPS=off
   [ "$scheme" = https ] && DEMO_PUBLIC_HTTPS=on
+  PROJECT=${DEMO_PROJECT:-inboxcore-demo}
+  case "$PROJECT" in *[!a-z0-9_-]*|'') die "DEMO_PROJECT must be lowercase letters, digits, - and _" ;; esac
   COMPOSE=(docker compose -p "$PROJECT" -f compose.yaml --env-file .local/bundle.env)
   [ "$DEMO_TUNNEL" = on ] && COMPOSE+=(--profile tunnel)
   return 0
@@ -330,5 +332,5 @@ print("total".ljust(40), f"{total / 2**20:.0f}MiB")'
     read -r -p "Delete the ${PROJECT} project's containers and volumes? [y/N] " answer
     [ "$answer" = "y" ] && "${COMPOSE[@]}" down -v
     ;;
-  *) sed -n '2,26p' "$(basename "$0")" ;;
+  *) sed -n '2,27p' "$(basename "$0")" ;;
 esac
