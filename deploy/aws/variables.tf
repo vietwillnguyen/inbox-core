@@ -35,9 +35,9 @@ variable "architecture" {
 }
 
 variable "cpu_credits" {
-  description = "Burstable CPU credit mode: unlimited (default for t4g; a sustained load above baseline is billed) or standard (throttled to baseline instead)."
+  description = "Burstable CPU credit mode: standard (throttled to baseline when the credits run out, never billed extra) or unlimited (a sustained load above baseline is billed)."
   type        = string
-  default     = "unlimited"
+  default     = "standard"
 
   validation {
     condition     = contains(["unlimited", "standard"], var.cpu_credits)

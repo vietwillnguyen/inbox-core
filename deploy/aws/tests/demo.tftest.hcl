@@ -70,6 +70,10 @@ run "defaults" {
     error_message = "a t4g.medium from the looked-up image by default"
   }
   assert {
+    condition     = aws_instance.demo.credit_specification[0].cpu_credits == "standard"
+    error_message = "CPU credits are standard by default: throttled, never billed extra"
+  }
+  assert {
     condition     = data.aws_ssm_parameter.ami.name == "/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id"
     error_message = "the image is Canonical's Ubuntu 24.04 for arm64"
   }
@@ -159,6 +163,12 @@ run "region_and_instance_type_are_variables" {
     architecture        = "amd64"
     root_volume_size_gb = 40
     budget_limit_usd    = 25
+    cpu_credits         = "unlimited"
+  }
+
+  assert {
+    condition     = aws_instance.demo.credit_specification[0].cpu_credits == "unlimited"
+    error_message = "the CPU credit mode follows the variable"
   }
 
   assert {
@@ -225,6 +235,16 @@ run "budget_email_is_checked" {
   }
 
   expect_failures = [var.budget_email]
+}
+
+run "cpu_credits_is_checked" {
+  command = plan
+
+  variables {
+    cpu_credits = "burst"
+  }
+
+  expect_failures = [var.cpu_credits]
 }
 
 run "the_tunnel_token_is_required" {
